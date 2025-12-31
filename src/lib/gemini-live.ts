@@ -101,6 +101,22 @@ export class GeminiLive {
     }
   }
 
+  // Send a text prompt to trigger the AI to start speaking
+  sendPrompt(text: string): void {
+    if (!this.session) return;
+    
+    // Send as properly formatted Content with role and parts
+    this.session.sendClientContent({
+      turns: [
+        {
+          role: "user",
+          parts: [{ text }],
+        },
+      ],
+      turnComplete: true,
+    });
+  }
+
   async sendAudio(audioBlob: Blob): Promise<void> {
     if (!this.session) return;
     

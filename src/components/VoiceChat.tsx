@@ -5,7 +5,6 @@ import { useGeminiLive, ConnectionStatus } from "@/hooks/useGeminiLive";
 import { VoiceOrb } from "./VoiceOrb";
 import { ConversationPanel } from "./ConversationPanel";
 import { LanguageSelector, getLanguageByCode } from "./LanguageSelector";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 interface Message {
@@ -24,27 +23,28 @@ export function VoiceChat({ apiKey }: VoiceChatProps) {
 
   const language = getLanguageByCode(selectedLanguage);
 
-  const systemInstruction = `You are a friendly language tutor helping someone practice ${language?.name || "Spanish"}.
+  const lang = language?.name || "Spanish";
+  
+  const systemInstruction = `You are a friendly language tutor helping someone practice ${lang}. Speak ONLY in ${lang} at all times.
 
-IMPORTANT: Respond ONLY in ${language?.name || "Spanish"}. Do not speak in English unless the user specifically asks for help in English.
+When the user sends <START>, simply greet them warmly in ${lang} and ask a simple conversation starter question. Do not acknowledge or reference the <START> token.
 
-Your role:
-- Speak naturally in ${language?.name || "Spanish"} at a conversational pace
-- Keep responses short (1-3 sentences)
-- Gently correct mistakes by naturally rephrasing what the user said correctly
-- Be warm, encouraging, and patient
-- Adjust your vocabulary and speed based on the learner's level
+For EACH user response:
+1. ECHO: Briefly paraphrase what the user said (from your perspective) to confirm understanding
+2. CORRECT/ENRICH (optional): Only if there's a clear mistake to fix OR a notably better way to say something - otherwise skip this
+3. CONTINUE: Respond naturally with a follow-up question or comment
 
-Start by greeting the user in ${language?.name || "Spanish"} and asking a simple question to start the conversation.`;
+Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
 
   // Handle user speech transcription - append to existing bubble if same speaker
   const handleUserTranscript = useCallback((text: string) => {
     setMessages((prev) => {
       const lastMessage = prev[prev.length - 1];
       if (lastMessage && lastMessage.role === "user") {
+        // Don't add extra space - API includes spacing in chunks
         return [
           ...prev.slice(0, -1),
-          { ...lastMessage, content: lastMessage.content + " " + text },
+          { ...lastMessage, content: lastMessage.content + text },
         ];
       }
       return [...prev, { id: crypto.randomUUID(), role: "user", content: text }];
@@ -56,9 +56,10 @@ Start by greeting the user in ${language?.name || "Spanish"} and asking a simple
     setMessages((prev) => {
       const lastMessage = prev[prev.length - 1];
       if (lastMessage && lastMessage.role === "assistant") {
+        // Don't add extra space - API includes spacing in chunks
         return [
           ...prev.slice(0, -1),
-          { ...lastMessage, content: lastMessage.content + " " + text },
+          { ...lastMessage, content: lastMessage.content + text },
         ];
       }
       return [...prev, { id: crypto.randomUUID(), role: "assistant", content: text }];
@@ -73,12 +74,15 @@ Start by greeting the user in ${language?.name || "Spanish"} and asking a simple
     onModelTranscript: handleModelTranscript,
   });
 
-  // Handle orb click - connects and starts talking, or toggles recording
+  // Handle orb click - simple on/off toggle
   const handleOrbClick = async () => {
-    if (gemini.isRecording) {
-      gemini.stopTalking();
+    if (gemini.status === "disconnected" || gemini.status === "error") {
+      // Turn on: start session
+      setMessages([]);
+      await gemini.startSession();
     } else {
-      await gemini.startTalking();
+      // Turn off: disconnect
+      gemini.disconnect();
     }
   };
 
@@ -87,15 +91,11 @@ Start by greeting the user in ${language?.name || "Spanish"} and asking a simple
       case "connecting":
         return "Connecting...";
       case "connected":
-        return gemini.isRecording
-          ? "Listening..."
-          : gemini.isModelSpeaking
-          ? "Speaking..."
-          : "Click to talk";
+        return "Session active • Click orb to end";
       case "error":
         return gemini.error || "Connection error";
       default:
-        return "Click to start";
+        return "Click orb to start";
     }
   };
 
@@ -111,10 +111,13 @@ Start by greeting the user in ${language?.name || "Spanish"} and asking a simple
         <LanguageSelector
           selectedLanguage={selectedLanguage}
           onSelectLanguage={(code) => {
+            const newLang = getLanguageByCode(code);
             setSelectedLanguage(code);
-            if (gemini.status === "connected") {
-              gemini.disconnect();
-              setMessages([]);
+            // If connected, tell the AI to switch languages (don't disconnect)
+            if (gemini.status === "connected" && newLang) {
+              gemini.sendPrompt(
+                `Please switch to ${newLang.name} now. From this point on, speak ONLY in ${newLang.name}. Acknowledge the switch briefly in ${newLang.name}.`
+              );
             }
           }}
         />
@@ -126,8 +129,6 @@ Start by greeting the user in ${language?.name || "Spanish"} and asking a simple
         <div className="relative py-8">
           <VoiceOrb
             isActive={isActive}
-            isListening={gemini.isRecording}
-            isSpeaking={gemini.isModelSpeaking}
             onClick={handleOrbClick}
             disabled={gemini.status === "connecting"}
           />
@@ -139,9 +140,7 @@ Start by greeting the user in ${language?.name || "Spanish"} and asking a simple
             "text-sm font-medium transition-colors",
             gemini.status === "error"
               ? "text-destructive"
-              : gemini.isRecording
-              ? "text-accent"
-              : gemini.isModelSpeaking
+              : gemini.status === "connected"
               ? "text-primary"
               : "text-muted-foreground"
           )}
@@ -149,20 +148,6 @@ Start by greeting the user in ${language?.name || "Spanish"} and asking a simple
           {getStatusMessage(gemini.status)}
         </p>
 
-        {/* End Session button - only show when connected */}
-        {gemini.status === "connected" && !gemini.isRecording && !gemini.isModelSpeaking && (
-          <Button
-            onClick={() => {
-              gemini.disconnect();
-              setMessages([]);
-            }}
-            variant="outline"
-            size="sm"
-            className="rounded-full"
-          >
-            End Session
-          </Button>
-        )}
       </div>
 
       {/* Conversation Panel */}

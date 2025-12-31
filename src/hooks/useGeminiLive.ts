@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, useEffect } from "react";
 import { GeminiLive, GeminiLiveConfig } from "@/lib/gemini-live";
 import { useAudioPlayer } from "./useAudioPlayer";
 import { useAudioRecorder } from "./useAudioRecorder";
@@ -36,6 +36,20 @@ export function useGeminiLive(options: UseGeminiLiveOptions) {
     sampleRate: 16000,
     onAudioData: handleAudioData,
   });
+
+  // Keep a ref to audioRecorder so callbacks always have the latest
+  const audioRecorderRef = useRef(audioRecorder);
+  useEffect(() => {
+    audioRecorderRef.current = audioRecorder;
+  }, [audioRecorder]);
+
+  // Keep refs for callbacks
+  const onUserTranscriptRef = useRef(onUserTranscript);
+  const onModelTranscriptRef = useRef(onModelTranscript);
+  useEffect(() => {
+    onUserTranscriptRef.current = onUserTranscript;
+    onModelTranscriptRef.current = onModelTranscript;
+  }, [onUserTranscript, onModelTranscript]);
 
   // Connect to Gemini Live - returns promise that resolves when connected
   const connect = useCallback((): Promise<void> => {
@@ -73,13 +87,15 @@ export function useGeminiLive(options: UseGeminiLiveOptions) {
           audioPlayer.queueAudio(audioBlob);
         },
         onUserTranscript: (text) => {
-          onUserTranscript?.(text);
+          onUserTranscriptRef.current?.(text);
         },
         onModelTranscript: (text) => {
-          onModelTranscript?.(text);
+          onModelTranscriptRef.current?.(text);
         },
         onTurnComplete: () => {
           setIsModelSpeaking(false);
+          // Auto-start recording after AI finishes speaking (use ref for latest)
+          audioRecorderRef.current.startRecording();
         },
         onError: (err) => {
           setError(err.message);
@@ -94,7 +110,7 @@ export function useGeminiLive(options: UseGeminiLiveOptions) {
 
       geminiRef.current.connect().catch(reject);
     });
-  }, [apiKey, voiceName, systemInstruction, audioPlayer, onUserTranscript, onModelTranscript, status]);
+  }, [apiKey, voiceName, systemInstruction, audioPlayer, status]);
 
   // Disconnect from Gemini Live
   const disconnect = useCallback(() => {
@@ -106,34 +122,48 @@ export function useGeminiLive(options: UseGeminiLiveOptions) {
     setIsModelSpeaking(false);
   }, [audioRecorder, audioPlayer]);
 
-  // Start talking - connects first if needed, then starts recording
-  const startTalking = useCallback(async () => {
+  // Start a new session - connects and prompts AI to greet
+  const startSession = useCallback(async () => {
     try {
-      // Connect if not already connected
       if (status !== "connected") {
         await connect();
       }
-      
-      // Start recording
-      audioPlayer.stop();
-      await audioRecorder.startRecording();
+      // Small delay to ensure session is ready, then trigger greeting
+      await new Promise(resolve => setTimeout(resolve, 200));
+      geminiRef.current?.sendPrompt("<START>");
     } catch (err) {
-      console.error("Failed to start talking:", err);
+      console.error("Failed to start session:", err);
     }
-  }, [status, connect, audioRecorder, audioPlayer]);
+  }, [status, connect]);
+
+  // Start talking - starts recording (must be connected first)
+  const startTalking = useCallback(async () => {
+    if (status !== "connected") return;
+    audioPlayer.stop();
+    await audioRecorder.startRecording();
+  }, [status, audioRecorder, audioPlayer]);
 
   // Stop talking
   const stopTalking = useCallback(() => {
     audioRecorder.stopRecording();
   }, [audioRecorder]);
 
+  // Send a text prompt to the AI (e.g., to switch languages)
+  const sendPrompt = useCallback((text: string) => {
+    if (status !== "connected") return;
+    audioRecorder.stopRecording();
+    geminiRef.current?.sendPrompt(text);
+  }, [status, audioRecorder]);
+
   return {
     status,
     error,
     isRecording: audioRecorder.isRecording,
     isModelSpeaking,
+    startSession,
     disconnect,
     startTalking,
     stopTalking,
+    sendPrompt,
   };
 }

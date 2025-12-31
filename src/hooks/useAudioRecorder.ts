@@ -19,6 +19,9 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
 
   const startRecording = useCallback(async () => {
+    // Don't start if already recording
+    if (isRecording) return;
+    
     try {
       setError(null);
       
@@ -53,9 +56,9 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
           int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
         
-        // Create blob with PCM data - use standard L16 MIME type
+        // Create blob with PCM data
         const blob = new Blob([int16Array.buffer], { 
-          type: "audio/L16;rate=16000;channels=1" 
+          type: `audio/pcm;rate=${sampleRate}` 
         });
         onAudioData?.(blob);
       };
@@ -69,7 +72,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       setError(message);
       console.error("Recording error:", err);
     }
-  }, [sampleRate, onAudioData]);
+  }, [sampleRate, onAudioData, isRecording]);
 
   const stopRecording = useCallback(() => {
     if (streamRef.current) {
