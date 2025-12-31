@@ -105,7 +105,6 @@ export class GeminiLive {
   sendPrompt(text: string): void {
     if (!this.session) return;
     
-    // Send as properly formatted Content with role and parts
     this.session.sendClientContent({
       turns: [
         {
@@ -113,6 +112,31 @@ export class GeminiLive {
           parts: [{ text }],
         },
       ],
+      turnComplete: true,
+    });
+  }
+
+  // Send conversation history as context, then a prompt
+  sendHistoryAndPrompt(
+    history: Array<{ role: "user" | "assistant"; content: string }>,
+    prompt: string
+  ): void {
+    if (!this.session) return;
+
+    // Convert history to turns format
+    const turns = history.map((msg) => ({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: msg.content }],
+    }));
+
+    // Add the prompt as the final user turn
+    turns.push({
+      role: "user",
+      parts: [{ text: prompt }],
+    });
+
+    this.session.sendClientContent({
+      turns,
       turnComplete: true,
     });
   }

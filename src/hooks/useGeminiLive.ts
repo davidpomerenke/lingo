@@ -122,15 +122,27 @@ export function useGeminiLive(options: UseGeminiLiveOptions) {
     setIsModelSpeaking(false);
   }, [audioRecorder, audioPlayer]);
 
-  // Start a new session - connects and prompts AI to greet
-  const startSession = useCallback(async () => {
+  // Start a new session - connects and prompts AI to greet or continue
+  const startSession = useCallback(async (
+    history: Array<{ role: "user" | "assistant"; content: string }> = [],
+    context: string = ""
+  ) => {
     try {
       if (status !== "connected") {
         await connect();
       }
-      // Small delay to ensure session is ready, then trigger greeting
+      // Small delay to ensure session is ready
       await new Promise(resolve => setTimeout(resolve, 200));
-      geminiRef.current?.sendPrompt("<START>");
+      
+      const contextPrefix = context ? `${context}\n` : "";
+      
+      if (history.length > 0) {
+        // Resume: send history as context, then continue prompt
+        geminiRef.current?.sendHistoryAndPrompt(history, `${contextPrefix}<CONTINUE>`);
+      } else {
+        // New session: just send start prompt with context
+        geminiRef.current?.sendPrompt(`${contextPrefix}<START>`);
+      }
     } catch (err) {
       console.error("Failed to start session:", err);
     }

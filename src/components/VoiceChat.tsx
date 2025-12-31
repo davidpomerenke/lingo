@@ -1,11 +1,58 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useGeminiLive, ConnectionStatus } from "@/hooks/useGeminiLive";
 import { VoiceOrb } from "./VoiceOrb";
 import { ConversationPanel } from "./ConversationPanel";
 import { LanguageSelector, getLanguageByCode } from "./LanguageSelector";
 import { cn } from "@/lib/utils";
+
+// Get user context (date, time, location)
+async function getUserContext(): Promise<string> {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const timeStr = now.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  let locationStr = "unknown";
+  try {
+    const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        timeout: 5000,
+        maximumAge: 300000, // Cache for 5 minutes
+      });
+    });
+    const { latitude, longitude } = position.coords;
+    // Try to get city name via reverse geocoding
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&zoom=10`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const city = data.address?.city || data.address?.town || data.address?.village || "";
+        const country = data.address?.country || "";
+        locationStr = [city, country].filter(Boolean).join(", ") || `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
+      }
+    } catch {
+      locationStr = `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
+    }
+  } catch {
+    // Geolocation denied or unavailable
+    locationStr = "not available";
+  }
+
+  return `<CONTEXT date="${dateStr}" time="${timeStr}" timezone="${timezone}" location="${locationStr}" />`;
+}
 
 interface Message {
   id: string;
@@ -20,14 +67,72 @@ interface VoiceChatProps {
 export function VoiceChat({ apiKey }: VoiceChatProps) {
   const [selectedLanguage, setSelectedLanguage] = useState("es");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const lastSavedRef = useRef<Map<string, string>>(new Map());
+  // Track "sealed" message IDs - messages we should never append to
+  const sealedMessageIdsRef = useRef<Set<string>>(new Set());
 
   const language = getLanguageByCode(selectedLanguage);
-
   const lang = language?.name || "Spanish";
-  
+
+  // Load messages from database on mount
+  useEffect(() => {
+    async function loadMessages() {
+      try {
+        const res = await fetch("/api/messages");
+        if (res.ok) {
+          const data = await res.json();
+          setMessages(data);
+          // Track what's already saved AND seal these messages
+          data.forEach((msg: Message) => {
+            lastSavedRef.current.set(msg.id, msg.content);
+            sealedMessageIdsRef.current.add(msg.id);
+          });
+        }
+      } catch (err) {
+        console.error("Failed to load messages:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadMessages();
+  }, []);
+
+  // Save messages to database when they change
+  useEffect(() => {
+    if (isLoading) return;
+
+    async function saveMessages() {
+      for (const msg of messages) {
+        const savedContent = lastSavedRef.current.get(msg.id);
+        if (savedContent === undefined) {
+          // New message - insert
+          await fetch("/api/messages", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: msg.id, role: msg.role, content: msg.content }),
+          });
+          lastSavedRef.current.set(msg.id, msg.content);
+        } else if (savedContent !== msg.content) {
+          // Existing message - update
+          await fetch("/api/messages", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: msg.id, content: msg.content, update: true }),
+          });
+          lastSavedRef.current.set(msg.id, msg.content);
+        }
+      }
+    }
+    saveMessages();
+  }, [messages, isLoading]);
+
   const systemInstruction = `You are a friendly language tutor helping someone practice ${lang}. Speak ONLY in ${lang} at all times.
 
-When the user sends <START>, simply greet them warmly in ${lang} and ask a simple conversation starter question. Do not acknowledge or reference the <START> token.
+Control tokens (never mention or acknowledge these directly):
+- <START> - Begin a new conversation with a warm greeting and simple question
+- <CONTINUE> - Resume conversation naturally from where you left off
+- <CONTEXT date="..." time="..." timezone="..." location="..." /> - Current user context; use naturally in conversation when relevant (e.g., time-appropriate greetings, location-based topics)
 
 For EACH user response:
 1. ECHO: Briefly paraphrase what the user said (from your perspective) to confirm understanding
@@ -36,33 +141,45 @@ For EACH user response:
 
 Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
 
-  // Handle user speech transcription - append to existing bubble if same speaker
+  // Handle user speech transcription - append to existing bubble if same speaker and not sealed
   const handleUserTranscript = useCallback((text: string) => {
     setMessages((prev) => {
       const lastMessage = prev[prev.length - 1];
-      if (lastMessage && lastMessage.role === "user") {
-        // Don't add extra space - API includes spacing in chunks
-        return [
-          ...prev.slice(0, -1),
-          { ...lastMessage, content: lastMessage.content + text },
-        ];
+      
+      // Check if last message is sealed (from DB or before session start)
+      const isSealed = lastMessage && sealedMessageIdsRef.current.has(lastMessage.id);
+      
+      // If sealed, speaker changed, or no messages, create new message
+      if (isSealed || !lastMessage || lastMessage.role !== "user") {
+        return [...prev, { id: crypto.randomUUID(), role: "user", content: text }];
       }
-      return [...prev, { id: crypto.randomUUID(), role: "user", content: text }];
+      
+      // Same speaker and not sealed, append to existing
+      return [
+        ...prev.slice(0, -1),
+        { ...lastMessage, content: lastMessage.content + text },
+      ];
     });
   }, []);
 
-  // Handle model speech transcription - append to existing bubble if same speaker
+  // Handle model speech transcription - append to existing bubble if same speaker and not sealed
   const handleModelTranscript = useCallback((text: string) => {
     setMessages((prev) => {
       const lastMessage = prev[prev.length - 1];
-      if (lastMessage && lastMessage.role === "assistant") {
-        // Don't add extra space - API includes spacing in chunks
-        return [
-          ...prev.slice(0, -1),
-          { ...lastMessage, content: lastMessage.content + text },
-        ];
+      
+      // Check if last message is sealed (from DB or before session start)
+      const isSealed = lastMessage && sealedMessageIdsRef.current.has(lastMessage.id);
+      
+      // If sealed, speaker changed, or no messages, create new message
+      if (isSealed || !lastMessage || lastMessage.role !== "assistant") {
+        return [...prev, { id: crypto.randomUUID(), role: "assistant", content: text }];
       }
-      return [...prev, { id: crypto.randomUUID(), role: "assistant", content: text }];
+      
+      // Same speaker and not sealed, append to existing
+      return [
+        ...prev.slice(0, -1),
+        { ...lastMessage, content: lastMessage.content + text },
+      ];
     });
   }, []);
 
@@ -77,11 +194,21 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
   // Handle orb click - simple on/off toggle
   const handleOrbClick = async () => {
     if (gemini.status === "disconnected" || gemini.status === "error") {
-      // Turn on: start session
-      setMessages([]);
-      await gemini.startSession();
+      // Seal all existing messages before starting session
+      messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
+      
+      // Get user context (date, time, location)
+      const context = await getUserContext();
+      
+      // Turn on: start or resume session
+      if (messages.length > 0) {
+        await gemini.startSession(messages.map(m => ({ role: m.role, content: m.content })), context);
+      } else {
+        await gemini.startSession([], context);
+      }
     } else {
-      // Turn off: disconnect
+      // Turn off: disconnect (and seal current messages for next session)
+      messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
       gemini.disconnect();
     }
   };
@@ -95,11 +222,19 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
       case "error":
         return gemini.error || "Connection error";
       default:
-        return "Click orb to start";
+        return messages.length > 0 ? "Click orb to continue" : "Click orb to start";
     }
   };
 
   const isActive = gemini.status === "connected" || gemini.status === "connecting";
+
+  if (isLoading) {
+    return (
+      <div className="w-full flex items-center justify-center py-20">
+        <div className="text-muted-foreground">Loading conversation...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full space-y-8">
@@ -113,8 +248,9 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
           onSelectLanguage={(code) => {
             const newLang = getLanguageByCode(code);
             setSelectedLanguage(code);
-            // If connected, tell the AI to switch languages (don't disconnect)
             if (gemini.status === "connected" && newLang) {
+              // Seal all current messages to force fresh bubble
+              messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
               gemini.sendPrompt(
                 `Please switch to ${newLang.name} now. From this point on, speak ONLY in ${newLang.name}. Acknowledge the switch briefly in ${newLang.name}.`
               );
@@ -125,7 +261,6 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
 
       {/* Main Voice Interface */}
       <div className="flex flex-col items-center gap-6">
-        {/* Voice Orb */}
         <div className="relative py-8">
           <VoiceOrb
             isActive={isActive}
@@ -134,7 +269,6 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
           />
         </div>
 
-        {/* Status Message */}
         <p
           className={cn(
             "text-sm font-medium transition-colors",
@@ -147,7 +281,6 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
         >
           {getStatusMessage(gemini.status)}
         </p>
-
       </div>
 
       {/* Conversation Panel */}
