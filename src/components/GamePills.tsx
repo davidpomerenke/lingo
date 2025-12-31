@@ -68,7 +68,7 @@ const games = [
     id: "guess-word",
     emoji: "🎯",
     label: "Guess the Word",
-    enabled: false,
+    enabled: true, // IMPLEMENTED
     // Description: AI describes a concept/object without saying the word.
     // User guesses the word in target language.
     // Good for: vocabulary, circumlocution, listening comprehension
