@@ -123,9 +123,11 @@ export function useGeminiLive(options: UseGeminiLiveOptions) {
   }, [audioRecorder, audioPlayer]);
 
   // Start a new session - connects and prompts AI to greet or continue
+  // customPrompt overrides the default <START>/<CONTINUE> behavior
   const startSession = useCallback(async (
     history: Array<{ role: "user" | "assistant"; content: string }> = [],
-    context: string = ""
+    contextOrPrompt: string = "",
+    isCustomPrompt: boolean = false
   ) => {
     try {
       if (status !== "connected") {
@@ -134,14 +136,21 @@ export function useGeminiLive(options: UseGeminiLiveOptions) {
       // Small delay to ensure session is ready
       await new Promise(resolve => setTimeout(resolve, 200));
       
-      const contextPrefix = context ? `${context}\n` : "";
-      
-      if (history.length > 0) {
-        // Resume: send history as context, then continue prompt
-        geminiRef.current?.sendHistoryAndPrompt(history, `${contextPrefix}<CONTINUE>`);
+      if (isCustomPrompt) {
+        // Custom prompt (e.g., starting with a game)
+        if (history.length > 0) {
+          geminiRef.current?.sendHistoryAndPrompt(history, contextOrPrompt);
+        } else {
+          geminiRef.current?.sendPrompt(contextOrPrompt);
+        }
       } else {
-        // New session: just send start prompt with context
-        geminiRef.current?.sendPrompt(`${contextPrefix}<START>`);
+        // Default behavior with context
+        const contextPrefix = contextOrPrompt ? `${contextOrPrompt}\n` : "";
+        if (history.length > 0) {
+          geminiRef.current?.sendHistoryAndPrompt(history, `${contextPrefix}<CONTINUE>`);
+        } else {
+          geminiRef.current?.sendPrompt(`${contextPrefix}<START>`);
+        }
       }
     } catch (err) {
       console.error("Failed to start session:", err);

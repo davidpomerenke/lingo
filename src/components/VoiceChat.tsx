@@ -5,6 +5,7 @@ import { useGeminiLive, ConnectionStatus } from "@/hooks/useGeminiLive";
 import { VoiceOrb } from "./VoiceOrb";
 import { ConversationPanel } from "./ConversationPanel";
 import { LanguageSelector, getLanguageByCode } from "./LanguageSelector";
+import { GamePills } from "./GamePills";
 import { cn } from "@/lib/utils";
 
 // Get user context (date, time, location)
@@ -68,6 +69,9 @@ export function VoiceChat({ apiKey }: VoiceChatProps) {
   const [selectedLanguage, setSelectedLanguage] = useState("es");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [readAloudText, setReadAloudText] = useState<string | null>(null);
+  // Track which message triggered the card and how many messages after it to keep it visible
+  const cardSourceMessageIdRef = useRef<string | null>(null);
   const lastSavedRef = useRef<Map<string, string>>(new Map());
   // Track "sealed" message IDs - messages we should never append to
   const sealedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -134,7 +138,10 @@ Control tokens (never mention or acknowledge these directly):
 - <CONTINUE> - Resume conversation naturally from where you left off
 - <CONTEXT date="..." time="..." timezone="..." location="..." /> - Current user context; use naturally in conversation when relevant (e.g., time-appropriate greetings, location-based topics)
 
-For EACH user response:
+Game tokens (seamlessly integrate into conversation):
+- <GAME type="read-aloud" /> - Generate a short text (1-3 sentences) in ${lang} for the user to read aloud. Say a brief intro like "Let's practice reading!", then say "TEXT:" followed by the exact text (DO NOT say the text before TEXT:, just say it once after the marker). The text will be displayed visually. Wait for the user to read it aloud, then give DETAILED and CRITICAL feedback on their pronunciation. Be specific: identify exact words that were mispronounced, explain HOW they should be pronounced correctly (phonetically if helpful), note rhythm/intonation issues. Don't just say "good job" - this is pronunciation practice, so be thorough and honest about errors while remaining constructive. End by asking if they want to try again or continue with another text.
+
+For EACH user response (in normal conversation):
 1. ECHO: Briefly paraphrase what the user said (from your perspective) to confirm understanding
 2. CORRECT/ENRICH (optional): Only if there's a clear mistake to fix OR a notably better way to say something - otherwise skip this
 3. CONTINUE: Respond naturally with a follow-up question or comment
@@ -145,16 +152,11 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
   const handleUserTranscript = useCallback((text: string) => {
     setMessages((prev) => {
       const lastMessage = prev[prev.length - 1];
-      
-      // Check if last message is sealed (from DB or before session start)
       const isSealed = lastMessage && sealedMessageIdsRef.current.has(lastMessage.id);
       
-      // If sealed, speaker changed, or no messages, create new message
       if (isSealed || !lastMessage || lastMessage.role !== "user") {
         return [...prev, { id: crypto.randomUUID(), role: "user", content: text }];
       }
-      
-      // Same speaker and not sealed, append to existing
       return [
         ...prev.slice(0, -1),
         { ...lastMessage, content: lastMessage.content + text },
@@ -166,16 +168,11 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
   const handleModelTranscript = useCallback((text: string) => {
     setMessages((prev) => {
       const lastMessage = prev[prev.length - 1];
-      
-      // Check if last message is sealed (from DB or before session start)
       const isSealed = lastMessage && sealedMessageIdsRef.current.has(lastMessage.id);
       
-      // If sealed, speaker changed, or no messages, create new message
       if (isSealed || !lastMessage || lastMessage.role !== "assistant") {
         return [...prev, { id: crypto.randomUUID(), role: "assistant", content: text }];
       }
-      
-      // Same speaker and not sealed, append to existing
       return [
         ...prev.slice(0, -1),
         { ...lastMessage, content: lastMessage.content + text },
@@ -190,6 +187,58 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
     onUserTranscript: handleUserTranscript,
     onModelTranscript: handleModelTranscript,
   });
+
+  // Manage read-aloud card based on messages
+  useEffect(() => {
+    if (messages.length === 0) {
+      if (cardSourceMessageIdRef.current) {
+        setReadAloudText(null);
+        cardSourceMessageIdRef.current = null;
+      }
+      return;
+    }
+    
+    // Find the most recent message with TEXT: marker
+    let textMessageIndex = -1;
+    let extractedText = "";
+    
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role === "assistant" && msg.content.includes("TEXT:")) {
+        const match = msg.content.match(/TEXT:\s*([\s\S]+)/);
+        if (match) {
+          textMessageIndex = i;
+          extractedText = match[1].trim();
+          break;
+        }
+      }
+    }
+    
+    if (textMessageIndex === -1) {
+      // No TEXT: message found, clear card
+      if (cardSourceMessageIdRef.current) {
+        setReadAloudText(null);
+        cardSourceMessageIdRef.current = null;
+      }
+      return;
+    }
+    
+    // Count how many messages AFTER the TEXT: message
+    const messagesAfter = messages.length - 1 - textMessageIndex;
+    
+    if (messagesAfter <= 2) {
+      // Show/update card - update text as message streams
+      cardSourceMessageIdRef.current = messages[textMessageIndex].id;
+      setReadAloudText(extractedText);
+    } else {
+      // More than 2 messages after, hide card
+      if (cardSourceMessageIdRef.current) {
+        setReadAloudText(null);
+        cardSourceMessageIdRef.current = null;
+      }
+    }
+  }, [messages]); // Only depend on messages, not readAloudText
+
 
   // Handle orb click - simple on/off toggle
   const handleOrbClick = async () => {
@@ -210,6 +259,26 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
       // Turn off: disconnect (and seal current messages for next session)
       messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
       gemini.disconnect();
+    }
+  };
+
+  // Handle game selection - works even when not connected
+  const handleGameSelect = async (gameId: string) => {
+    // Seal existing messages for fresh bubble
+    messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
+    
+    // Clear any previous read-aloud text
+    setReadAloudText(null);
+    cardSourceMessageIdRef.current = null;
+    
+    if (gemini.status !== "connected") {
+      // Not connected - start session with game command
+      const context = await getUserContext();
+      const gamePrompt = `${context}\n<GAME type="${gameId}" />`;
+      await gemini.startSession(messages.map(m => ({ role: m.role, content: m.content })), gamePrompt, true);
+    } else {
+      // Already connected - just send game command
+      gemini.sendPrompt(`<GAME type="${gameId}" />`);
     }
   };
 
@@ -281,6 +350,30 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
         >
           {getStatusMessage(gemini.status)}
         </p>
+      </div>
+
+      {/* Read Aloud Display */}
+      {readAloudText && (
+        <div className="glass rounded-2xl p-6 mt-4 text-center">
+          <p className="text-xs text-muted-foreground mb-2">Read this aloud:</p>
+          <p className="text-xl font-medium text-foreground leading-relaxed">
+            {readAloudText}
+          </p>
+          <button
+            onClick={() => setReadAloudText(null)}
+            className="mt-3 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Practice Games - always visible and clickable */}
+      <div className="mt-6">
+        <GamePills
+          onSelectGame={handleGameSelect}
+          disabled={gemini.status === "connecting"}
+        />
       </div>
 
       {/* Conversation Panel */}
