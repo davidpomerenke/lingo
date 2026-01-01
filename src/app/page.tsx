@@ -1,19 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { VoiceChat } from "@/components/VoiceChat";
 import { useAuth } from "@/lib/auth-context";
 
 export default function Home() {
-  const { user, isLoading, logout } = useAuth();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!isLoading && !user) {
-      router.push("/login");
-    }
-  }, [user, isLoading, router]);
+  const { user, isLoading, logout, isAnonymous } = useAuth();
 
   if (isLoading) {
     return (
@@ -21,10 +13,6 @@ export default function Home() {
         <div className="text-muted-foreground">Loading...</div>
       </div>
     );
-  }
-
-  if (!user) {
-    return null; // Will redirect
   }
 
   return (
@@ -41,13 +29,24 @@ export default function Home() {
       <div className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4 py-12">
         {/* User menu */}
         <div className="absolute top-4 right-4 flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">{user.email}</span>
-          <button
-            onClick={logout}
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Sign out
-          </button>
+          {user ? (
+            <>
+              <span className="text-sm text-muted-foreground">{user.email}</span>
+              <button
+                onClick={logout}
+                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Sign out
+              </button>
+            </>
+          ) : (
+            <Link
+              href="/login"
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Sign in
+            </Link>
+          )}
         </div>
 
         {/* Header */}

@@ -10,6 +10,7 @@ const client = createClient({
 export interface DbUser {
   id: string;
   email: string;
+  languages: string[]; // User's selected languages
   created_at: string;
 }
 
@@ -46,9 +47,17 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
+      languages TEXT DEFAULT '["English","Spanish","French","Italian","German","Arabic","Hindi","Japanese","Korean","Chinese"]',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+  
+  // Add languages column if it doesn't exist (migration)
+  try {
+    await client.execute(`ALTER TABLE users ADD COLUMN languages TEXT DEFAULT '["English","Spanish","French","Italian","German","Arabic","Hindi","Japanese","Korean","Chinese"]'`);
+  } catch {
+    // Column already exists
+  }
 
   // Auth tokens for magic links (short-lived)
   await client.execute(`
@@ -85,9 +94,20 @@ export async function initDb() {
 
 // ============ Users ============
 
+const DEFAULT_LANGUAGES = ["English","Spanish","French","Italian","German","Arabic","Hindi","Japanese","Korean","Chinese"];
+
+function parseLanguages(raw: string | null): string[] {
+  if (!raw) return DEFAULT_LANGUAGES;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return DEFAULT_LANGUAGES;
+  }
+}
+
 export async function getUserByEmail(email: string): Promise<DbUser | null> {
   const result = await client.execute({
-    sql: "SELECT id, email, created_at FROM users WHERE email = ?",
+    sql: "SELECT id, email, languages, created_at FROM users WHERE email = ?",
     args: [email.toLowerCase()],
   });
   if (result.rows.length === 0) return null;
@@ -95,13 +115,14 @@ export async function getUserByEmail(email: string): Promise<DbUser | null> {
   return {
     id: row.id as string,
     email: row.email as string,
+    languages: parseLanguages(row.languages as string | null),
     created_at: row.created_at as string,
   };
 }
 
 export async function getUserById(id: string): Promise<DbUser | null> {
   const result = await client.execute({
-    sql: "SELECT id, email, created_at FROM users WHERE id = ?",
+    sql: "SELECT id, email, languages, created_at FROM users WHERE id = ?",
     args: [id],
   });
   if (result.rows.length === 0) return null;
@@ -109,6 +130,7 @@ export async function getUserById(id: string): Promise<DbUser | null> {
   return {
     id: row.id as string,
     email: row.email as string,
+    languages: parseLanguages(row.languages as string | null),
     created_at: row.created_at as string,
   };
 }
@@ -119,14 +141,29 @@ export async function createUser(email: string): Promise<DbUser> {
     sql: "INSERT INTO users (id, email) VALUES (?, ?)",
     args: [id, email.toLowerCase()],
   });
-  return { id, email: email.toLowerCase(), created_at: new Date().toISOString() };
+  return { 
+    id, 
+    email: email.toLowerCase(), 
+    languages: DEFAULT_LANGUAGES,
+    created_at: new Date().toISOString() 
+  };
 }
 
-export async function getOrCreateUser(email: string): Promise<DbUser> {
+export async function getOrCreateUser(email: string): Promise<{ user: DbUser; isNew: boolean }> {
   const existing = await getUserByEmail(email);
-  if (existing) return existing;
-  return createUser(email);
+  if (existing) return { user: existing, isNew: false };
+  const user = await createUser(email);
+  return { user, isNew: true };
 }
+
+export async function updateUserLanguages(userId: string, languages: string[]): Promise<void> {
+  await client.execute({
+    sql: "UPDATE users SET languages = ? WHERE id = ?",
+    args: [JSON.stringify(languages), userId],
+  });
+}
+
+export { DEFAULT_LANGUAGES };
 
 // ============ Auth Tokens (Magic Links) ============
 
@@ -263,6 +300,24 @@ export async function clearMessages(userId: string): Promise<void> {
     sql: "DELETE FROM messages WHERE user_id = ?",
     args: [userId],
   });
+}
+
+// Migrate anonymous messages to a real user
+export async function migrateAnonMessages(anonId: string, userId: string): Promise<number> {
+  const result = await client.execute({
+    sql: "UPDATE messages SET user_id = ? WHERE user_id = ?",
+    args: [userId, anonId],
+  });
+  return result.rowsAffected;
+}
+
+// Count messages for a user (including anonymous)
+export async function countMessages(userId: string): Promise<number> {
+  const result = await client.execute({
+    sql: "SELECT COUNT(*) as count FROM messages WHERE user_id = ?",
+    args: [userId],
+  });
+  return result.rows[0].count as number;
 }
 
 export { client };

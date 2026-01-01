@@ -2,15 +2,21 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 
+const DEFAULT_LANGUAGES = ["English","Spanish","French","Italian","German","Arabic","Hindi","Japanese","Korean","Chinese"];
+
 interface User {
   id: string;
   email: string;
+  languages: string[];
 }
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  sessionId: string | null;
+  isAnonymous: boolean;
+  effectiveUserId: string | null;
+  languages: string[];
+  setLanguages: (languages: string[]) => Promise<void>;
   login: (email: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   getEphemeralToken: (provider: "gemini" | "openai") => Promise<string | null>;
@@ -19,10 +25,14 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 const SESSION_KEY = "lingo_session";
+const ANON_KEY = "lingo_anon_id";
+const LANGUAGES_KEY = "lingo_languages";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [anonId, setAnonId] = useState<string | null>(null);
+  const [languages, setLanguagesState] = useState<string[]>(DEFAULT_LANGUAGES);
   const [isLoading, setIsLoading] = useState(true);
 
   // Check for session on mount
@@ -32,10 +42,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const params = new URLSearchParams(window.location.search);
       const urlSession = params.get("session");
       
+      // Get or create anonymous ID
+      let storedAnonId = localStorage.getItem(ANON_KEY);
+      if (!storedAnonId) {
+        storedAnonId = `anon_${crypto.randomUUID()}`;
+        localStorage.setItem(ANON_KEY, storedAnonId);
+      }
+      setAnonId(storedAnonId);
+      
+      // Load languages from localStorage for anonymous users
+      const storedLanguages = localStorage.getItem(LANGUAGES_KEY);
+      if (storedLanguages) {
+        try {
+          setLanguagesState(JSON.parse(storedLanguages));
+        } catch {
+          // Invalid JSON, use defaults
+        }
+      }
+      
       if (urlSession) {
         // Store session and clean URL
         localStorage.setItem(SESSION_KEY, urlSession);
         window.history.replaceState({}, "", window.location.pathname);
+        
+        // Migrate anonymous data to this user
+        const anonLanguages = localStorage.getItem(LANGUAGES_KEY);
+        try {
+          await fetch("/api/auth/migrate", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-session-id": urlSession,
+            },
+            body: JSON.stringify({ 
+              anonId: storedAnonId,
+              languages: anonLanguages ? JSON.parse(anonLanguages) : null,
+            }),
+          });
+          // Clear anon data after migration
+          localStorage.removeItem(ANON_KEY);
+          localStorage.removeItem(LANGUAGES_KEY);
+          setAnonId(null);
+        } catch (e) {
+          console.error("Failed to migrate:", e);
+        }
       }
 
       // Get session from localStorage
@@ -54,8 +104,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const data = await res.json();
             if (data.user) {
               setUser(data.user);
+              setLanguagesState(data.user.languages || DEFAULT_LANGUAGES);
             } else {
-              // Invalid session
               localStorage.removeItem(SESSION_KEY);
               setSessionId(null);
             }
@@ -80,7 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, anonId }),
       });
 
       if (!res.ok) {
@@ -92,7 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       return { success: false, error: "Network error" };
     }
-  }, []);
+  }, [anonId]);
 
   const logout = useCallback(async () => {
     if (sessionId) {
@@ -109,17 +159,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(SESSION_KEY);
     setSessionId(null);
     setUser(null);
+    setLanguagesState(DEFAULT_LANGUAGES);
+    
+    // Create new anon ID for fresh anonymous session
+    const newAnonId = `anon_${crypto.randomUUID()}`;
+    localStorage.setItem(ANON_KEY, newAnonId);
+    setAnonId(newAnonId);
+  }, [sessionId]);
+
+  const setLanguages = useCallback(async (newLanguages: string[]) => {
+    setLanguagesState(newLanguages);
+    
+    if (sessionId) {
+      // Save to server for authenticated users
+      try {
+        await fetch("/api/user/languages", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "x-session-id": sessionId,
+          },
+          body: JSON.stringify({ languages: newLanguages }),
+        });
+        // Update user object
+        setUser(prev => prev ? { ...prev, languages: newLanguages } : null);
+      } catch (e) {
+        console.error("Failed to save languages:", e);
+      }
+    } else {
+      // Save to localStorage for anonymous users
+      localStorage.setItem(LANGUAGES_KEY, JSON.stringify(newLanguages));
+    }
   }, [sessionId]);
 
   const getEphemeralToken = useCallback(async (provider: "gemini" | "openai"): Promise<string | null> => {
-    if (!sessionId) return null;
-
     try {
       const res = await fetch("/api/auth/ephemeral-token", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-session-id": sessionId,
+          ...(sessionId && { "x-session-id": sessionId }),
+          ...(anonId && { "x-anon-id": anonId }),
         },
         body: JSON.stringify({ provider }),
       });
@@ -135,10 +215,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Error getting ephemeral token:", error);
       return null;
     }
-  }, [sessionId]);
+  }, [sessionId, anonId]);
+
+  const isAnonymous = !user && !!anonId;
+  const effectiveUserId = user?.id || anonId;
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, sessionId, login, logout, getEphemeralToken }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      isLoading, 
+      isAnonymous,
+      effectiveUserId,
+      languages,
+      setLanguages,
+      login, 
+      logout, 
+      getEphemeralToken 
+    }}>
       {children}
     </AuthContext.Provider>
   );
@@ -152,3 +245,4 @@ export function useAuth() {
   return context;
 }
 
+export { DEFAULT_LANGUAGES };

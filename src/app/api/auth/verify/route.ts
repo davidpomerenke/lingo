@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { initDb, verifyAuthToken, getOrCreateUser, createSession } from "@/lib/db";
+import { sendNewUserNotification } from "@/lib/email";
 
 export async function GET(request: NextRequest) {
   try {
@@ -19,7 +20,12 @@ export async function GET(request: NextRequest) {
     }
 
     // Get or create user
-    const user = await getOrCreateUser(email);
+    const { user, isNew } = await getOrCreateUser(email);
+
+    // Notify admin of new registration (non-blocking)
+    if (isNew) {
+      sendNewUserNotification(email);
+    }
 
     // Create session
     const sessionId = await createSession(user.id);

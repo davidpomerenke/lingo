@@ -5,11 +5,12 @@ import { useLiveProvider } from "@/hooks/useLiveProvider";
 import type { ProviderType } from "@/lib/live-provider";
 import { VoiceOrb } from "./VoiceOrb";
 import { ConversationPanel } from "./ConversationPanel";
-import { LanguageSelector, getLanguageByCode } from "./LanguageSelector";
+import { LanguageSelector } from "./LanguageSelector";
 import { ProviderSelector } from "./ProviderSelector";
 import { GamePills } from "./GamePills";
 import { useAuth } from "@/lib/auth-context";
-import { cn } from "@/lib/utils";
+
+const SHOW_SIGNIN_AFTER_MESSAGES = 20;
 
 // Get user context (date, time, location)
 async function getUserContext(): Promise<string> {
@@ -65,13 +66,16 @@ interface Message {
 }
 
 export function VoiceChat() {
-  const { sessionId, getEphemeralToken } = useAuth();
+  const { user, isAnonymous, effectiveUserId, getEphemeralToken, login, languages } = useAuth();
   
-  const [selectedLanguage, setSelectedLanguage] = useState("es");
+  const [selectedLanguage, setSelectedLanguage] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<ProviderType>("gemini");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [readAloudText, setReadAloudText] = useState<string | null>(null);
+  const [showSignInPrompt, setShowSignInPrompt] = useState(false);
+  const [signInEmail, setSignInEmail] = useState("");
+  const [signInStatus, setSignInStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   
   // Track which message triggered the card and how many messages after it to keep it visible
   const cardSourceMessageIdRef = useRef<string | null>(null);
@@ -79,35 +83,54 @@ export function VoiceChat() {
   // Track "sealed" message IDs - messages we should never append to
   const sealedMessageIdsRef = useRef<Set<string>>(new Set());
 
-  const language = getLanguageByCode(selectedLanguage);
-  const lang = language?.name || "Spanish";
+  // Set initial language from user's languages
+  useEffect(() => {
+    if (!selectedLanguage && languages.length > 0) {
+      setSelectedLanguage(languages[0]);
+    }
+  }, [languages, selectedLanguage]);
 
-  // Helper to make authenticated API calls
+  const lang = selectedLanguage || "Spanish";
+
+  // Helper to make API calls with auth headers
   const authFetch = useCallback((url: string, options: RequestInit = {}) => {
-    return fetch(url, {
-      ...options,
-      headers: {
-        ...options.headers,
-        "x-session-id": sessionId || "",
-      },
-    });
-  }, [sessionId]);
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string>),
+    };
+    
+    // Add appropriate auth header
+    if (user) {
+      // Get session from localStorage for authenticated users
+      const sessionId = localStorage.getItem("lingo_session");
+      if (sessionId) headers["x-session-id"] = sessionId;
+    } else if (effectiveUserId) {
+      // Use anonymous ID
+      headers["x-anon-id"] = effectiveUserId;
+    }
+    
+    return fetch(url, { ...options, headers });
+  }, [user, effectiveUserId]);
 
   // Load messages from database on mount
   useEffect(() => {
-    if (!sessionId) return;
+    if (!effectiveUserId) return;
     
     async function loadMessages() {
       try {
         const res = await authFetch("/api/messages");
         if (res.ok) {
           const data = await res.json();
-          setMessages(data);
+          setMessages(data.messages || []);
           // Track what's already saved AND seal these messages
-          data.forEach((msg: Message) => {
+          (data.messages || []).forEach((msg: Message) => {
             lastSavedRef.current.set(msg.id, msg.content);
             sealedMessageIdsRef.current.add(msg.id);
           });
+          
+          // Show sign-in suggestion after threshold (but don't block)
+          if (data.isAnonymous && data.messageCount >= SHOW_SIGNIN_AFTER_MESSAGES) {
+            setShowSignInPrompt(true);
+          }
         }
       } catch (err) {
         console.error("Failed to load messages:", err);
@@ -116,23 +139,31 @@ export function VoiceChat() {
       }
     }
     loadMessages();
-  }, [sessionId, authFetch]);
+  }, [effectiveUserId, authFetch]);
 
   // Save messages to database when they change
   useEffect(() => {
-    if (isLoading || !sessionId) return;
+    if (isLoading || !effectiveUserId) return;
 
     async function saveMessages() {
       for (const msg of messages) {
         const savedContent = lastSavedRef.current.get(msg.id);
         if (savedContent === undefined) {
           // New message - insert
-          await authFetch("/api/messages", {
+          const res = await authFetch("/api/messages", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ id: msg.id, role: msg.role, content: msg.content }),
           });
           lastSavedRef.current.set(msg.id, msg.content);
+          
+          // Show sign-in suggestion after threshold
+          if (res.ok) {
+            const data = await res.json();
+            if (data.isAnonymous && data.messageCount >= SHOW_SIGNIN_AFTER_MESSAGES) {
+              setShowSignInPrompt(true);
+            }
+          }
         } else if (savedContent !== msg.content) {
           // Existing message - update
           await authFetch("/api/messages", {
@@ -145,7 +176,7 @@ export function VoiceChat() {
       }
     }
     saveMessages();
-  }, [messages, isLoading, sessionId, authFetch]);
+  }, [messages, isLoading, effectiveUserId, authFetch]);
 
   const systemInstruction = `You are a friendly language tutor helping someone practice ${lang}. Speak ONLY in ${lang} at all times.
 
@@ -317,12 +348,27 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
     }
   };
 
+  // Handle sign-in from prompt
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!signInEmail) return;
+    
+    setSignInStatus("sending");
+    const result = await login(signInEmail);
+    
+    if (result.success) {
+      setSignInStatus("sent");
+    } else {
+      setSignInStatus("error");
+    }
+  };
+
   const isActive = liveProvider.status === "connected" || liveProvider.status === "connecting";
 
   if (isLoading) {
     return (
       <div className="w-full flex items-center justify-center py-20">
-        <div className="text-muted-foreground">Loading conversation...</div>
+        <div className="text-muted-foreground">Loading...</div>
       </div>
     );
   }
@@ -367,14 +413,13 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
         </h3>
         <LanguageSelector
           selectedLanguage={selectedLanguage}
-          onSelectLanguage={(code) => {
-            const newLang = getLanguageByCode(code);
-            setSelectedLanguage(code);
-            if (liveProvider.status === "connected" && newLang) {
+          onSelectLanguage={(newLang) => {
+            setSelectedLanguage(newLang);
+            if (liveProvider.status === "connected") {
               // Seal all current messages to force fresh bubble
               messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
               liveProvider.sendPrompt(
-                `Please switch to ${newLang.name} now. From this point on, speak ONLY in ${newLang.name}. Acknowledge the switch briefly in ${newLang.name}.`
+                `Please switch to ${newLang} now. From this point on, speak ONLY in ${newLang}. Acknowledge the switch briefly in ${newLang}.`
               );
             }
           }}
@@ -434,6 +479,48 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
             messages={messages}
             isModelSpeaking={liveProvider.isModelSpeaking}
           />
+        </div>
+      )}
+
+      {/* Sign-in suggestion for anonymous users */}
+      {isAnonymous && showSignInPrompt && (
+        <div className="glass rounded-2xl p-6">
+          <div className="text-center mb-4">
+            <h3 className="text-lg font-semibold">Save your progress</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              Sign in to keep your conversation history
+            </p>
+          </div>
+          
+          {signInStatus === "sent" ? (
+            <div className="text-center py-4">
+              <p className="text-sm text-muted-foreground">
+                Check your email for a magic link to sign in.<br />
+                Your conversation will be saved!
+              </p>
+            </div>
+          ) : (
+            <form onSubmit={handleSignIn} className="space-y-3">
+              <input
+                type="email"
+                value={signInEmail}
+                onChange={(e) => setSignInEmail(e.target.value)}
+                placeholder="your@email.com"
+                className="w-full px-4 py-3 bg-secondary/50 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"
+                disabled={signInStatus === "sending"}
+              />
+              <button
+                type="submit"
+                disabled={signInStatus === "sending" || !signInEmail}
+                className="w-full py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:opacity-50 transition-all"
+              >
+                {signInStatus === "sending" ? "Sending..." : "Sign in with Email"}
+              </button>
+              {signInStatus === "error" && (
+                <p className="text-sm text-destructive text-center">Failed to send email. Try again.</p>
+              )}
+            </form>
+          )}
         </div>
       )}
 

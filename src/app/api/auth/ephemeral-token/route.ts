@@ -5,16 +5,17 @@ import { GoogleGenAI } from "@google/genai";
 export async function POST(request: NextRequest) {
   try {
     const sessionId = request.headers.get("x-session-id");
+    const anonId = request.headers.get("x-anon-id");
 
-    if (!sessionId) {
+    // Allow either authenticated session OR anonymous user
+    if (sessionId) {
+      await initDb();
+      const session = await getSession(sessionId);
+      if (!session) {
+        return NextResponse.json({ error: "Invalid session" }, { status: 401 });
+      }
+    } else if (!anonId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    await initDb();
-
-    const session = await getSession(sessionId);
-    if (!session) {
-      return NextResponse.json({ error: "Invalid session" }, { status: 401 });
     }
 
     const { provider } = await request.json();

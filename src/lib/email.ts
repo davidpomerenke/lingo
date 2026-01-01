@@ -57,3 +57,28 @@ export async function sendMagicLinkEmail(
   });
 }
 
+// Notify admin of new user registration
+export async function sendNewUserNotification(userEmail: string): Promise<void> {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  if (!adminEmail) return; // Skip if not configured
+
+  try {
+    await transporter.sendMail({
+      from: `Lingo <${process.env.SMTP_USER}>`,
+      to: adminEmail,
+      subject: "New Lingo user registered",
+      text: `A new user just registered on Lingo!\n\nEmail: ${userEmail}\nTime: ${new Date().toISOString()}`,
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px;">
+          <h2>🎉 New Lingo user!</h2>
+          <p><strong>Email:</strong> ${userEmail}</p>
+          <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+        </div>
+      `,
+    });
+  } catch (error) {
+    console.error("Failed to send admin notification:", error);
+    // Don't throw - this shouldn't block user registration
+  }
+}
+
