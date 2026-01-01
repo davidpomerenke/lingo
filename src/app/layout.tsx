@@ -23,7 +23,7 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className={`${dmSans.variable} font-sans antialiased`}>
         <AuthProvider>
-          {children}
+        {children}
         </AuthProvider>
       </body>
     </html>

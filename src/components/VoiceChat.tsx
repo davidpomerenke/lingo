@@ -657,6 +657,10 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
           <button
             onClick={async () => {
               if (confirm("Clear all chat history?")) {
+                // Stop session if active
+                if (liveProvider.status === "connected") {
+                  liveProvider.disconnect();
+                }
                 await authFetch("/api/messages", { method: "DELETE" });
                 setMessages([]);
                 lastSavedRef.current.clear();
@@ -675,6 +679,7 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
           <ConversationPanel
             messages={messages}
             isModelSpeaking={liveProvider.isModelSpeaking}
+            currentLanguage={selectedLanguage}
           />
         </div>
       )}
