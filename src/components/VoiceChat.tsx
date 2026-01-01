@@ -65,6 +65,7 @@ interface Message {
   content: string;
   language?: string;      // Language at time of message
   useLatinLetters?: boolean;  // Script mode at time of message
+  provider?: "gemini" | "openai";  // AI provider at time of message
 }
 
 // Languages that use non-Latin scripts
@@ -103,6 +104,25 @@ const SUPPORTED_LANGUAGES = new Set([
   "Macedonian", "Bosnian", "Georgian", "Armenian", "Azerbaijani", "Kazakh",
   "Uzbek", "Nepali", "Sinhala", "Amharic", "Afrikaans", "Latin"
 ]);
+
+// ISO 639-1 language codes for transcription
+const LANGUAGE_CODES: Record<string, string> = {
+  "English": "en", "Spanish": "es", "French": "fr", "German": "de", "Italian": "it",
+  "Portuguese": "pt", "Russian": "ru", "Chinese": "zh", "Japanese": "ja", "Korean": "ko",
+  "Arabic": "ar", "Hindi": "hi", "Dutch": "nl", "Greek": "el", "Polish": "pl",
+  "Swedish": "sv", "Norwegian": "no", "Danish": "da", "Finnish": "fi", "Czech": "cs",
+  "Hungarian": "hu", "Romanian": "ro", "Ukrainian": "uk", "Turkish": "tr", "Bulgarian": "bg",
+  "Croatian": "hr", "Serbian": "sr", "Slovak": "sk", "Slovenian": "sl", "Lithuanian": "lt",
+  "Latvian": "lv", "Estonian": "et", "Vietnamese": "vi", "Thai": "th", "Indonesian": "id",
+  "Malay": "ms", "Filipino": "tl", "Tagalog": "tl", "Bengali": "bn", "Tamil": "ta",
+  "Telugu": "te", "Marathi": "mr", "Gujarati": "gu", "Kannada": "kn", "Malayalam": "ml",
+  "Punjabi": "pa", "Urdu": "ur", "Hebrew": "he", "Persian": "fa", "Swahili": "sw",
+  "Catalan": "ca", "Basque": "eu", "Galician": "gl", "Irish": "ga", "Welsh": "cy",
+  "Icelandic": "is", "Albanian": "sq", "Macedonian": "mk", "Bosnian": "bs",
+  "Georgian": "ka", "Armenian": "hy", "Azerbaijani": "az", "Kazakh": "kk",
+  "Uzbek": "uz", "Nepali": "ne", "Sinhala": "si", "Amharic": "am", "Afrikaans": "af",
+  "Latin": "la", "Pashto": "ps", "Kurdish": "ku", "Dari": "fa",
+};
 
 export function VoiceChat() {
   const { user, isAnonymous, effectiveUserId, getEphemeralToken, login, languages, scriptModes, setScriptMode } = useAuth();
@@ -164,12 +184,24 @@ export function VoiceChat() {
         const res = await authFetch("/api/messages");
         if (res.ok) {
           const data = await res.json();
-          setMessages(data.messages || []);
+          const loadedMessages: Message[] = data.messages || [];
+          setMessages(loadedMessages);
           // Track what's already saved AND seal these messages
-          (data.messages || []).forEach((msg: Message) => {
+          loadedMessages.forEach((msg: Message) => {
             lastSavedRef.current.set(msg.id, msg.content);
             sealedMessageIdsRef.current.add(msg.id);
           });
+          
+          // Set language and provider from the last message if available
+          if (loadedMessages.length > 0) {
+            const lastMessage = loadedMessages[loadedMessages.length - 1];
+            if (lastMessage.language) {
+              setSelectedLanguage(lastMessage.language);
+            }
+            if (lastMessage.provider) {
+              setSelectedProvider(lastMessage.provider);
+            }
+          }
           
           // Show sign-in suggestion after threshold (but don't block)
           if (data.isAnonymous && data.messageCount >= SHOW_SIGNIN_AFTER_MESSAGES) {
@@ -193,11 +225,18 @@ export function VoiceChat() {
       for (const msg of messages) {
         const savedContent = lastSavedRef.current.get(msg.id);
         if (savedContent === undefined) {
-          // New message - insert
+          // New message - insert with language info
           const res = await authFetch("/api/messages", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: msg.id, role: msg.role, content: msg.content }),
+            body: JSON.stringify({ 
+              id: msg.id, 
+              role: msg.role, 
+              content: msg.content,
+              language: msg.language,
+              useLatinLetters: msg.useLatinLetters,
+              provider: msg.provider,
+            }),
           });
           lastSavedRef.current.set(msg.id, msg.content);
           
@@ -275,6 +314,7 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
           content: text,
           language: lang,
           useLatinLetters,
+          provider: selectedProvider,
         }];
       }
       return [
@@ -282,7 +322,7 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
         { ...lastMessage, content: lastMessage.content + text },
       ];
     });
-  }, [lang, useLatinLetters]);
+  }, [lang, useLatinLetters, selectedProvider]);
 
   // Handle model speech transcription - append to existing bubble if same speaker and not sealed
   const handleModelTranscript = useCallback((text: string) => {
@@ -297,6 +337,7 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
           content: text,
           language: lang,
           useLatinLetters,
+          provider: selectedProvider,
         }];
       }
       return [
@@ -304,12 +345,13 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
         { ...lastMessage, content: lastMessage.content + text },
       ];
     });
-  }, [lang, useLatinLetters]);
+  }, [lang, useLatinLetters, selectedProvider]);
 
   const liveProvider = useLiveProvider({
     provider: selectedProvider,
     voiceName: "Kore",
     systemInstruction,
+    inputLanguage: LANGUAGE_CODES[lang], // Help transcription recognize the expected language
     onUserTranscript: handleUserTranscript,
     onModelTranscript: handleModelTranscript,
   });
@@ -491,6 +533,11 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
             if (liveProvider.status === "connected") {
               // Seal all current messages to force fresh bubble
               messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
+              // Update transcription language for OpenAI (Gemini uses system prompt)
+              const newLangCode = LANGUAGE_CODES[newLang];
+              if (newLangCode) {
+                liveProvider.updateInputLanguage(newLangCode);
+              }
               // Include script mode for the NEW language (not current)
               const isNewLangNonLatin = NON_LATIN_LANGUAGES.has(newLang);
               const newLangUseLatinLetters = isNewLangNonLatin ? (scriptModes[newLang] ?? true) : false;
@@ -605,7 +652,26 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
 
       {/* Conversation Panel */}
       {messages.length > 0 && (
-        <div className="glass rounded-2xl p-4">
+        <div className="glass rounded-2xl p-4 relative">
+          {/* Clear history button */}
+          <button
+            onClick={async () => {
+              if (confirm("Clear all chat history?")) {
+                await authFetch("/api/messages", { method: "DELETE" });
+                setMessages([]);
+                lastSavedRef.current.clear();
+                sealedMessageIdsRef.current.clear();
+              }
+            }}
+            className="absolute top-2 right-2 p-1.5 rounded-full text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 transition-colors"
+            title="Clear chat history"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+              <path d="M3 6h18" />
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+            </svg>
+          </button>
           <ConversationPanel
             messages={messages}
             isModelSpeaking={liveProvider.isModelSpeaking}

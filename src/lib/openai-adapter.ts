@@ -31,7 +31,7 @@ interface SessionConfig {
   voice: string;
   input_audio_format: string;
   output_audio_format: string;
-  input_audio_transcription: { model: string } | null;
+  input_audio_transcription: { model: string; language?: string } | null;
   turn_detection: { type: string; threshold?: number; silence_duration_ms?: number } | null;
   tools?: Array<{
     type: "function";
@@ -134,7 +134,10 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
       voice,
       input_audio_format: "pcm16",
       output_audio_format: "pcm16",
-      input_audio_transcription: { model: "whisper-1" },
+      input_audio_transcription: { 
+        model: "whisper-1",
+        ...(this.config.inputLanguage && { language: this.config.inputLanguage }),
+      },
       turn_detection: {
         type: "server_vad",
         threshold: 0.5,
@@ -424,6 +427,22 @@ Continue the conversation naturally based on the above context.`;
 
   isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  // Update transcription language mid-session
+  updateInputLanguage(language: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    
+    console.log("OpenAI: Updating input language to", language);
+    this.send({
+      type: "session.update",
+      session: {
+        input_audio_transcription: {
+          model: "whisper-1",
+          language,
+        },
+      },
+    });
   }
 }
 

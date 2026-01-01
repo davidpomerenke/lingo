@@ -52,12 +52,12 @@ export async function POST(request: NextRequest) {
     }
 
     await initDb();
-    const { id, role, content, update } = await request.json();
+    const { id, role, content, language, useLatinLetters, provider, update } = await request.json();
     
     if (update) {
       await updateMessage(id, content);
     } else {
-      await addMessage(id, userId, role, content);
+      await addMessage(id, userId, role, content, language, useLatinLetters, provider);
     }
     
     // Return current message count

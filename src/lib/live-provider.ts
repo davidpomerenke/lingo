@@ -44,6 +44,7 @@ export interface LiveProviderConfig {
   voiceName?: string;
   systemInstruction: string;
   functions?: FunctionDefinition[];
+  inputLanguage?: string; // ISO-639-1 language code for expected user audio (e.g., "en", "ja", "ar")
 }
 
 export interface LiveProviderCallbacks {
@@ -79,5 +80,8 @@ export interface LiveProvider {
   
   // Function calling
   sendFunctionResult(result: FunctionResult): void;
+  
+  // Update transcription language (for mid-session language switches)
+  updateInputLanguage?(language: string): void;
 }
 

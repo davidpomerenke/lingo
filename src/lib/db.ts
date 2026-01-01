@@ -33,6 +33,9 @@ export interface DbMessage {
   user_id: string;
   role: "user" | "assistant";
   content: string;
+  language?: string;
+  use_latin_letters?: boolean;
+  provider?: "gemini" | "openai";
   created_at: string;
 }
 
@@ -63,6 +66,27 @@ export async function initDb() {
   // Add script_modes column if it doesn't exist (migration)
   try {
     await client.execute(`ALTER TABLE users ADD COLUMN script_modes TEXT DEFAULT '{}'`);
+  } catch {
+    // Column already exists
+  }
+  
+  // Add language column to messages if it doesn't exist (migration)
+  try {
+    await client.execute(`ALTER TABLE messages ADD COLUMN language TEXT`);
+  } catch {
+    // Column already exists
+  }
+  
+  // Add use_latin_letters column to messages if it doesn't exist (migration)
+  try {
+    await client.execute(`ALTER TABLE messages ADD COLUMN use_latin_letters INTEGER`);
+  } catch {
+    // Column already exists
+  }
+  
+  // Add provider column to messages if it doesn't exist (migration)
+  try {
+    await client.execute(`ALTER TABLE messages ADD COLUMN provider TEXT`);
   } catch {
     // Column already exists
   }
@@ -291,7 +315,7 @@ export async function cleanupSessions(): Promise<void> {
 
 export async function getMessages(userId: string): Promise<DbMessage[]> {
   const result = await client.execute({
-    sql: "SELECT id, user_id, role, content, created_at FROM messages WHERE user_id = ? ORDER BY created_at ASC",
+    sql: "SELECT id, user_id, role, content, language, use_latin_letters, provider, created_at FROM messages WHERE user_id = ? ORDER BY created_at ASC",
     args: [userId],
   });
   return result.rows.map((row) => ({
@@ -299,6 +323,9 @@ export async function getMessages(userId: string): Promise<DbMessage[]> {
     user_id: row.user_id as string,
     role: row.role as "user" | "assistant",
     content: row.content as string,
+    language: row.language as string | undefined,
+    use_latin_letters: row.use_latin_letters === 1 ? true : row.use_latin_letters === 0 ? false : undefined,
+    provider: row.provider as "gemini" | "openai" | undefined,
     created_at: row.created_at as string,
   }));
 }
@@ -307,11 +334,14 @@ export async function addMessage(
   id: string,
   userId: string,
   role: "user" | "assistant",
-  content: string
+  content: string,
+  language?: string,
+  useLatinLetters?: boolean,
+  provider?: "gemini" | "openai"
 ): Promise<void> {
   await client.execute({
-    sql: "INSERT INTO messages (id, user_id, role, content) VALUES (?, ?, ?, ?)",
-    args: [id, userId, role, content],
+    sql: "INSERT INTO messages (id, user_id, role, content, language, use_latin_letters, provider) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    args: [id, userId, role, content, language ?? null, useLatinLetters === undefined ? null : useLatinLetters ? 1 : 0, provider ?? null],
   });
 }
 

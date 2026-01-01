@@ -29,6 +29,7 @@ interface UseLiveProviderOptions {
   voiceName?: string;
   systemInstruction: string;
   functions?: FunctionDefinition[];
+  inputLanguage?: string; // ISO-639-1 code for expected user audio language
   onUserTranscript?: (text: string) => void;
   onModelTranscript?: (text: string) => void;
   onFunctionCall?: (call: FunctionCall) => void;
@@ -40,6 +41,7 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     voiceName, 
     systemInstruction, 
     functions,
+    inputLanguage,
     onUserTranscript, 
     onModelTranscript,
     onFunctionCall,
@@ -128,6 +130,7 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
       voiceName,
       systemInstruction,
       functions,
+      inputLanguage,
     };
 
     const callbacks = buildCallbacks(type);
@@ -137,7 +140,7 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     } else {
       return new OpenAIRealtimeAdapter(config, callbacks);
     }
-  }, [voiceName, systemInstruction, functions, buildCallbacks]);
+  }, [voiceName, systemInstruction, functions, inputLanguage, buildCallbacks]);
 
   // Connect to provider
   const connect = useCallback((apiKey: string, type?: ProviderType): Promise<void> => {
@@ -264,6 +267,12 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     providerRef.current?.sendFunctionResult(result);
   }, [status]);
 
+  // Update input language mid-session (for transcription)
+  const updateInputLanguage = useCallback((language: string) => {
+    if (status !== "connected") return;
+    providerRef.current?.updateInputLanguage?.(language);
+  }, [status]);
+
   return {
     status,
     currentProvider,
@@ -278,6 +287,7 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     stopTalking,
     sendPrompt,
     sendFunctionResult,
+    updateInputLanguage,
   };
 }
 
