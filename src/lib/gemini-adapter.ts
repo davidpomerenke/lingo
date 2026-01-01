@@ -1,28 +1,49 @@
-import { GoogleGenAI, LiveServerMessage, Modality, Session, Blob as GeminiBlob } from "@google/genai";
+/**
+ * Gemini Live API Adapter
+ * 
+ * Implements the LiveProvider interface for Google's Gemini Live API.
+ * Uses the @google/genai SDK for WebSocket communication.
+ */
 
-export interface GeminiLiveConfig {
-  apiKey: string;
-  voiceName?: string;
-  systemInstruction: string;
+import { GoogleGenAI, LiveServerMessage, Modality, Session, Blob as GeminiBlob, FunctionDeclaration, Type } from "@google/genai";
+import type { LiveProvider, LiveProviderConfig, LiveProviderCallbacks, FunctionDefinition, FunctionResult } from "./live-provider";
+
+// Map our function definitions to Gemini's format
+function toGeminiFunctionDeclarations(functions?: FunctionDefinition[]): FunctionDeclaration[] | undefined {
+  if (!functions || functions.length === 0) return undefined;
+  
+  return functions.map(fn => ({
+    name: fn.name,
+    description: fn.description,
+    parameters: {
+      type: Type.OBJECT,
+      properties: Object.fromEntries(
+        Object.entries(fn.parameters.properties).map(([key, value]) => [
+          key,
+          {
+            type: value.type === "string" ? Type.STRING : 
+                  value.type === "number" ? Type.NUMBER :
+                  value.type === "boolean" ? Type.BOOLEAN :
+                  value.type === "array" ? Type.ARRAY : Type.STRING,
+            description: value.description,
+            enum: value.enum,
+          }
+        ])
+      ),
+      required: fn.parameters.required,
+    },
+  }));
 }
 
-export interface GeminiLiveCallbacks {
-  onOpen?: () => void;
-  onAudio?: (audioData: Blob) => void;
-  onUserTranscript?: (text: string) => void;
-  onModelTranscript?: (text: string) => void;
-  onTurnComplete?: () => void;
-  onError?: (error: Error) => void;
-  onClose?: () => void;
-}
-
-export class GeminiLive {
+export class GeminiLiveAdapter implements LiveProvider {
+  readonly providerType = "gemini" as const;
+  
   private ai: GoogleGenAI;
   private session: Session | null = null;
-  private callbacks: GeminiLiveCallbacks;
-  private config: GeminiLiveConfig;
+  private callbacks: LiveProviderCallbacks;
+  private config: LiveProviderConfig;
 
-  constructor(config: GeminiLiveConfig, callbacks: GeminiLiveCallbacks = {}) {
+  constructor(config: LiveProviderConfig, callbacks: LiveProviderCallbacks = {}) {
     this.config = config;
     this.callbacks = callbacks;
     this.ai = new GoogleGenAI({ apiKey: config.apiKey });
@@ -30,6 +51,11 @@ export class GeminiLive {
 
   async connect(): Promise<void> {
     const model = "models/gemini-2.5-flash-native-audio-preview-12-2025";
+
+    // Build tools config if functions are defined
+    const tools = this.config.functions ? [{
+      functionDeclarations: toGeminiFunctionDeclarations(this.config.functions),
+    }] : undefined;
 
     const sessionConfig = {
       responseModalities: [Modality.AUDIO],
@@ -43,6 +69,7 @@ export class GeminiLive {
       },
       inputAudioTranscription: {},
       outputAudioTranscription: {},
+      tools,
     };
 
     this.session = await this.ai.live.connect({
@@ -83,6 +110,15 @@ export class GeminiLive {
           });
           this.callbacks.onAudio?.(blob);
         }
+        
+        // Handle function calls
+        if (part.functionCall) {
+          this.callbacks.onFunctionCall?.({
+            id: part.functionCall.id || crypto.randomUUID(),
+            name: part.functionCall.name || "",
+            arguments: (part.functionCall.args as Record<string, unknown>) || {},
+          });
+        }
       }
     }
 
@@ -101,7 +137,6 @@ export class GeminiLive {
     }
   }
 
-  // Send a text prompt to trigger the AI to start speaking
   sendPrompt(text: string): void {
     if (!this.session) return;
     
@@ -116,7 +151,6 @@ export class GeminiLive {
     });
   }
 
-  // Send conversation history as context, then a prompt
   sendHistoryAndPrompt(
     history: Array<{ role: "user" | "assistant"; content: string }>,
     prompt: string
@@ -166,6 +200,17 @@ export class GeminiLive {
     }
   }
 
+  sendFunctionResult(result: FunctionResult): void {
+    if (!this.session) return;
+    
+    this.session.sendToolResponse({
+      functionResponses: [{
+        id: result.callId,
+        response: result.result as Record<string, unknown>,
+      }],
+    });
+  }
+
   disconnect(): void {
     if (this.session) {
       this.session.close();
@@ -194,3 +239,4 @@ export function pcmBlobToFloat32Array(blob: Blob): Promise<Float32Array> {
     reader.readAsArrayBuffer(blob);
   });
 }
+

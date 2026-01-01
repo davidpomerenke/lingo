@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useGeminiLive, ConnectionStatus } from "@/hooks/useGeminiLive";
+import { useLiveProvider } from "@/hooks/useLiveProvider";
+import type { ProviderType } from "@/lib/live-provider";
 import { VoiceOrb } from "./VoiceOrb";
 import { ConversationPanel } from "./ConversationPanel";
 import { LanguageSelector, getLanguageByCode } from "./LanguageSelector";
+import { ProviderSelector } from "./ProviderSelector";
 import { GamePills } from "./GamePills";
 import { cn } from "@/lib/utils";
 
@@ -62,11 +64,13 @@ interface Message {
 }
 
 interface VoiceChatProps {
-  apiKey: string;
+  geminiApiKey: string;
+  openaiApiKey?: string;
 }
 
-export function VoiceChat({ apiKey }: VoiceChatProps) {
+export function VoiceChat({ geminiApiKey, openaiApiKey }: VoiceChatProps) {
   const [selectedLanguage, setSelectedLanguage] = useState("es");
+  const [selectedProvider, setSelectedProvider] = useState<ProviderType>("gemini");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [readAloudText, setReadAloudText] = useState<string | null>(null);
@@ -136,7 +140,7 @@ export function VoiceChat({ apiKey }: VoiceChatProps) {
 Control tokens (never mention or acknowledge these directly):
 - <START> - Begin a new conversation with a warm greeting and simple question
 - <CONTINUE> - Resume conversation naturally from where you left off
-- <CONTEXT date="..." time="..." timezone="..." location="..." /> - Current user context; use naturally in conversation when relevant (e.g., time-appropriate greetings, location-based topics)
+- <CONTEXT date="..." time="..." timezone="..." location="..." /> - Background info about the user. DO NOT explicitly mention these facts. Use them subtly: appropriate greeting for time of day, awareness of local context. Only mention directly if truly relevant to conversation.
 
 Game tokens (seamlessly integrate into conversation):
 IMPORTANT RULES FOR ALL GAMES:
@@ -186,8 +190,12 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
     });
   }, []);
 
-  const gemini = useGeminiLive({
-    apiKey,
+  // Get the appropriate API key for the selected provider
+  const currentApiKey = selectedProvider === "gemini" ? geminiApiKey : (openaiApiKey || "");
+  
+  const liveProvider = useLiveProvider({
+    provider: selectedProvider,
+    apiKey: currentApiKey,
     voiceName: "Kore",
     systemInstruction,
     onUserTranscript: handleUserTranscript,
@@ -248,7 +256,7 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
 
   // Handle orb click - simple on/off toggle
   const handleOrbClick = async () => {
-    if (gemini.status === "disconnected" || gemini.status === "error") {
+    if (liveProvider.status === "disconnected" || liveProvider.status === "error") {
       // Seal all existing messages before starting session
       messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
       
@@ -257,14 +265,14 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
       
       // Turn on: start or resume session
       if (messages.length > 0) {
-        await gemini.startSession(messages.map(m => ({ role: m.role, content: m.content })), context);
+        await liveProvider.startSession(messages.map(m => ({ role: m.role, content: m.content })), context);
       } else {
-        await gemini.startSession([], context);
+        await liveProvider.startSession([], context);
       }
     } else {
       // Turn off: disconnect (and seal current messages for next session)
       messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
-      gemini.disconnect();
+      liveProvider.disconnect();
     }
   };
 
@@ -277,31 +285,18 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
     setReadAloudText(null);
     cardSourceMessageIdRef.current = null;
     
-    if (gemini.status !== "connected") {
+    if (liveProvider.status !== "connected") {
       // Not connected - start session with game command
       const context = await getUserContext();
       const gamePrompt = `${context}\n<GAME type="${gameId}" />`;
-      await gemini.startSession(messages.map(m => ({ role: m.role, content: m.content })), gamePrompt, true);
+      await liveProvider.startSession(messages.map(m => ({ role: m.role, content: m.content })), gamePrompt, true);
     } else {
       // Already connected - just send game command
-      gemini.sendPrompt(`<GAME type="${gameId}" />`);
+      liveProvider.sendPrompt(`<GAME type="${gameId}" />`);
     }
   };
 
-  const getStatusMessage = (status: ConnectionStatus): string => {
-    switch (status) {
-      case "connecting":
-        return "Connecting...";
-      case "connected":
-        return "Session active • Click orb to end";
-      case "error":
-        return gemini.error || "Connection error";
-      default:
-        return messages.length > 0 ? "Click orb to continue" : "Click orb to start";
-    }
-  };
-
-  const isActive = gemini.status === "connected" || gemini.status === "connecting";
+  const isActive = liveProvider.status === "connected" || liveProvider.status === "connecting";
 
   if (isLoading) {
     return (
@@ -311,8 +306,36 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
     );
   }
 
+  // Handle provider switch - automatically restart session with new provider
+  const handleProviderSwitch = async (newProvider: ProviderType) => {
+    if (newProvider === selectedProvider) return;
+    
+    // Seal existing messages for fresh bubble
+    messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
+    
+    // Update UI state
+    setSelectedProvider(newProvider);
+    
+    // If session is active, switch provider (transfers context automatically)
+    if (isActive) {
+      const newApiKey = newProvider === "gemini" ? geminiApiKey : (openaiApiKey || "");
+      await liveProvider.switchProvider(
+        newProvider,
+        messages.map(m => ({ role: m.role, content: m.content })),
+        newApiKey
+      );
+    }
+  };
+  
+  // Get orb label based on state
+  const getOrbLabel = () => {
+    if (liveProvider.status === "connecting") return "...";
+    if (isActive) return undefined; // No label when active (shows waveform)
+    return messages.length > 0 ? "Continue" : "Start";
+  };
+
   return (
-    <div className="w-full space-y-8">
+    <div className="w-full space-y-6">
       {/* Language Selector */}
       <div className="space-y-3">
         <h3 className="text-center text-sm font-medium text-muted-foreground">
@@ -323,10 +346,10 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
           onSelectLanguage={(code) => {
             const newLang = getLanguageByCode(code);
             setSelectedLanguage(code);
-            if (gemini.status === "connected" && newLang) {
+            if (liveProvider.status === "connected" && newLang) {
               // Seal all current messages to force fresh bubble
               messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
-              gemini.sendPrompt(
+              liveProvider.sendPrompt(
                 `Please switch to ${newLang.name} now. From this point on, speak ONLY in ${newLang.name}. Acknowledge the switch briefly in ${newLang.name}.`
               );
             }
@@ -334,33 +357,39 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
         />
       </div>
 
+      {/* Provider Selector */}
+      <div className="space-y-3">
+        <h3 className="text-center text-sm font-medium text-muted-foreground">
+          AI teacher
+        </h3>
+        <ProviderSelector
+          selectedProvider={selectedProvider}
+          onSelectProvider={handleProviderSwitch}
+        />
+      </div>
+
       {/* Main Voice Interface */}
-      <div className="flex flex-col items-center gap-6">
-        <div className="relative py-8">
+      <div className="flex flex-col items-center">
+        <div className="relative py-6">
           <VoiceOrb
             isActive={isActive}
+            label={getOrbLabel()}
             onClick={handleOrbClick}
-            disabled={gemini.status === "connecting"}
+            disabled={liveProvider.status === "connecting"}
           />
         </div>
 
-        <p
-          className={cn(
-            "text-sm font-medium transition-colors",
-            gemini.status === "error"
-              ? "text-destructive"
-              : gemini.status === "connected"
-              ? "text-primary"
-              : "text-muted-foreground"
-          )}
-        >
-          {getStatusMessage(gemini.status)}
-        </p>
+        {/* Only show error messages */}
+        {liveProvider.status === "error" && (
+          <p className="text-sm font-medium text-destructive mt-2">
+            {liveProvider.error || "Connection error"}
+          </p>
+        )}
       </div>
 
       {/* Read Aloud Display */}
       {readAloudText && (
-        <div className="glass rounded-2xl p-6 mt-4 text-center">
+        <div className="glass rounded-2xl p-6 text-center">
           <p className="text-xs text-muted-foreground mb-2">Read this aloud:</p>
           <p className="text-xl font-medium text-foreground leading-relaxed">
             {readAloudText}
@@ -374,23 +403,23 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
         </div>
       )}
 
-      {/* Practice Games - always visible and clickable */}
-      <div className="mt-6">
-        <GamePills
-          onSelectGame={handleGameSelect}
-          disabled={gemini.status === "connecting"}
-        />
-      </div>
-
       {/* Conversation Panel */}
       {messages.length > 0 && (
-        <div className="glass rounded-2xl p-4 mt-8">
+        <div className="glass rounded-2xl p-4">
           <ConversationPanel
             messages={messages}
-            isModelSpeaking={gemini.isModelSpeaking}
+            isModelSpeaking={liveProvider.isModelSpeaking}
           />
         </div>
       )}
+
+      {/* Practice Games - below conversation */}
+      <div className="pt-2">
+        <GamePills
+          onSelectGame={handleGameSelect}
+          disabled={liveProvider.status === "connecting"}
+        />
+      </div>
     </div>
   );
 }

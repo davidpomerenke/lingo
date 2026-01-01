@@ -4,11 +4,12 @@ import { cn } from "@/lib/utils";
 
 interface VoiceOrbProps {
   isActive: boolean;
+  label?: string;
   onClick?: () => void;
   disabled?: boolean;
 }
 
-export function VoiceOrb({ isActive, onClick, disabled }: VoiceOrbProps) {
+export function VoiceOrb({ isActive, label, onClick, disabled }: VoiceOrbProps) {
   return (
     <button
       onClick={onClick}
@@ -66,23 +67,12 @@ export function VoiceOrb({ isActive, onClick, disabled }: VoiceOrbProps) {
         </div>
       )}
 
-      {/* Microphone icon when idle */}
-      {!isActive && (
+      {/* Label text when idle */}
+      {!isActive && label && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="w-12 h-12 text-muted-foreground/60"
-          >
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" x2="12" y1="19" y2="22" />
-          </svg>
+          <span className="text-lg font-medium text-muted-foreground/80 select-none">
+            {label}
+          </span>
         </div>
       )}
     </button>

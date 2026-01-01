@@ -3,7 +3,8 @@
 import { VoiceChat } from "@/components/VoiceChat";
 
 export default function Home() {
-  const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || "";
+  const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || "";
+  const openaiApiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || "";
 
   return (
     <div className="min-h-screen relative overflow-hidden">
@@ -37,13 +38,16 @@ export default function Home() {
 
         {/* Main Content */}
         <main className="w-full max-w-2xl mx-auto">
-          <VoiceChat apiKey={apiKey} />
+          <VoiceChat 
+            geminiApiKey={geminiApiKey} 
+            openaiApiKey={openaiApiKey} 
+          />
         </main>
 
         {/* Footer */}
         <footer className="mt-16 text-center">
           <p className="text-xs text-muted-foreground/40">
-            Powered by Google Gemini Live API
+            Powered by Gemini & OpenAI Realtime APIs
           </p>
         </footer>
       </div>

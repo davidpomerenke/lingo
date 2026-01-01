@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { pcmBlobToFloat32Array } from "@/lib/gemini-live";
+import { pcmBlobToFloat32Array } from "@/lib/gemini-adapter";
 
 export function useAudioPlayer(sampleRate: number = 24000) {
   const [isPlaying, setIsPlaying] = useState(false);
