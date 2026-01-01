@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
         id: user.id,
         email: user.email,
         languages: user.languages,
+        script_modes: user.script_modes,
       },
     });
   } catch (error) {

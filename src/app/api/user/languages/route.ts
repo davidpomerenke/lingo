@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { initDb, getSession, updateUserLanguages } from "@/lib/db";
+import { initDb, getSession, updateUserLanguages, updateUserScriptModes } from "@/lib/db";
 
 export async function PUT(request: NextRequest) {
   try {
@@ -16,27 +16,35 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: "Invalid session" }, { status: 401 });
     }
 
-    const { languages } = await request.json();
+    const { languages, scriptModes } = await request.json();
 
-    if (!Array.isArray(languages) || languages.length === 0) {
-      return NextResponse.json({ error: "Languages must be a non-empty array" }, { status: 400 });
+    // Update languages if provided
+    if (languages !== undefined) {
+      if (!Array.isArray(languages) || languages.length === 0) {
+        return NextResponse.json({ error: "Languages must be a non-empty array" }, { status: 400 });
+      }
+
+      // Validate each language is a non-empty string
+      const cleanedLanguages = languages
+        .filter((l): l is string => typeof l === "string" && l.trim().length > 0)
+        .map(l => l.trim());
+
+      if (cleanedLanguages.length === 0) {
+        return NextResponse.json({ error: "At least one valid language required" }, { status: 400 });
+      }
+
+      await updateUserLanguages(session.user_id, cleanedLanguages);
     }
 
-    // Validate each language is a non-empty string
-    const cleanedLanguages = languages
-      .filter((l): l is string => typeof l === "string" && l.trim().length > 0)
-      .map(l => l.trim());
-
-    if (cleanedLanguages.length === 0) {
-      return NextResponse.json({ error: "At least one valid language required" }, { status: 400 });
+    // Update script modes if provided
+    if (scriptModes !== undefined && typeof scriptModes === "object") {
+      await updateUserScriptModes(session.user_id, scriptModes);
     }
 
-    await updateUserLanguages(session.user_id, cleanedLanguages);
-
-    return NextResponse.json({ success: true, languages: cleanedLanguages });
+    return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Update languages error:", error);
-    return NextResponse.json({ error: "Failed to update languages" }, { status: 500 });
+    console.error("Update user preferences error:", error);
+    return NextResponse.json({ error: "Failed to update preferences" }, { status: 500 });
   }
 }
 

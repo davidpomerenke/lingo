@@ -3,15 +3,30 @@
 import { cn } from "@/lib/utils";
 import { useEffect, useRef } from "react";
 
+// RTL languages
+const RTL_LANGUAGES = new Set([
+  "Arabic", "Hebrew", "Persian", "Urdu", "Pashto", "Dari", "Kurdish"
+]);
+
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  language?: string;
+  useLatinLetters?: boolean;
 }
 
 interface ConversationPanelProps {
   messages: Message[];
   isModelSpeaking: boolean;
+}
+
+// Check if a message should be displayed RTL
+function isMessageRTL(message: Message): boolean {
+  if (!message.language) return false;
+  // Only RTL when using native script (not Latin letters)
+  if (message.useLatinLetters) return false;
+  return RTL_LANGUAGES.has(message.language);
 }
 
 export function ConversationPanel({ messages, isModelSpeaking }: ConversationPanelProps) {
@@ -38,26 +53,31 @@ export function ConversationPanel({ messages, isModelSpeaking }: ConversationPan
           </div>
         ) : (
           <div className="space-y-4">
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={cn(
-                  "flex",
-                  message.role === "user" ? "justify-end" : "justify-start"
-                )}
-              >
+            {messages.map((message) => {
+              const rtl = isMessageRTL(message);
+              return (
                 <div
+                  key={message.id}
                   className={cn(
-                    "max-w-[85%] px-4 py-2 rounded-2xl text-sm",
-                    message.role === "user"
-                      ? "bg-primary/20 text-foreground rounded-br-sm"
-                      : "bg-secondary text-foreground rounded-bl-sm"
+                    "flex",
+                    message.role === "user" ? "justify-end" : "justify-start"
                   )}
                 >
-                  {message.content}
+                  <div
+                    dir={rtl ? "rtl" : "ltr"}
+                    className={cn(
+                      "max-w-[85%] px-4 py-2 rounded-2xl text-sm",
+                      message.role === "user"
+                        ? "bg-primary/20 text-foreground rounded-br-sm"
+                        : "bg-secondary text-foreground rounded-bl-sm",
+                      rtl && "text-right"
+                    )}
+                  >
+                    {message.content}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             
             {isModelSpeaking && (
               <div className="flex justify-start">

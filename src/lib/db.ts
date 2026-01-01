@@ -11,6 +11,7 @@ export interface DbUser {
   id: string;
   email: string;
   languages: string[]; // User's selected languages
+  script_modes: Record<string, boolean>; // Per-language: true = Latin letters, false = native script
   created_at: string;
 }
 
@@ -55,6 +56,13 @@ export async function initDb() {
   // Add languages column if it doesn't exist (migration)
   try {
     await client.execute(`ALTER TABLE users ADD COLUMN languages TEXT DEFAULT '["English","Spanish","French","Italian","German","Arabic","Hindi","Japanese","Korean","Chinese"]'`);
+  } catch {
+    // Column already exists
+  }
+  
+  // Add script_modes column if it doesn't exist (migration)
+  try {
+    await client.execute(`ALTER TABLE users ADD COLUMN script_modes TEXT DEFAULT '{}'`);
   } catch {
     // Column already exists
   }
@@ -105,9 +113,18 @@ function parseLanguages(raw: string | null): string[] {
   }
 }
 
+function parseScriptModes(raw: string | null): Record<string, boolean> {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
 export async function getUserByEmail(email: string): Promise<DbUser | null> {
   const result = await client.execute({
-    sql: "SELECT id, email, languages, created_at FROM users WHERE email = ?",
+    sql: "SELECT id, email, languages, script_modes, created_at FROM users WHERE email = ?",
     args: [email.toLowerCase()],
   });
   if (result.rows.length === 0) return null;
@@ -116,13 +133,14 @@ export async function getUserByEmail(email: string): Promise<DbUser | null> {
     id: row.id as string,
     email: row.email as string,
     languages: parseLanguages(row.languages as string | null),
+    script_modes: parseScriptModes(row.script_modes as string | null),
     created_at: row.created_at as string,
   };
 }
 
 export async function getUserById(id: string): Promise<DbUser | null> {
   const result = await client.execute({
-    sql: "SELECT id, email, languages, created_at FROM users WHERE id = ?",
+    sql: "SELECT id, email, languages, script_modes, created_at FROM users WHERE id = ?",
     args: [id],
   });
   if (result.rows.length === 0) return null;
@@ -131,6 +149,7 @@ export async function getUserById(id: string): Promise<DbUser | null> {
     id: row.id as string,
     email: row.email as string,
     languages: parseLanguages(row.languages as string | null),
+    script_modes: parseScriptModes(row.script_modes as string | null),
     created_at: row.created_at as string,
   };
 }
@@ -145,6 +164,7 @@ export async function createUser(email: string): Promise<DbUser> {
     id, 
     email: email.toLowerCase(), 
     languages: DEFAULT_LANGUAGES,
+    script_modes: {},
     created_at: new Date().toISOString() 
   };
 }
@@ -160,6 +180,13 @@ export async function updateUserLanguages(userId: string, languages: string[]): 
   await client.execute({
     sql: "UPDATE users SET languages = ? WHERE id = ?",
     args: [JSON.stringify(languages), userId],
+  });
+}
+
+export async function updateUserScriptModes(userId: string, scriptModes: Record<string, boolean>): Promise<void> {
+  await client.execute({
+    sql: "UPDATE users SET script_modes = ? WHERE id = ?",
+    args: [JSON.stringify(scriptModes), userId],
   });
 }
 

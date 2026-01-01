@@ -63,10 +63,49 @@ interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  language?: string;      // Language at time of message
+  useLatinLetters?: boolean;  // Script mode at time of message
 }
 
+// Languages that use non-Latin scripts
+const NON_LATIN_LANGUAGES = new Set([
+  // East Asian
+  "Chinese", "Japanese", "Korean", "Classical Chinese",
+  // South Asian
+  "Hindi", "Bengali", "Tamil", "Telugu", "Marathi", "Gujarati", "Kannada", 
+  "Malayalam", "Punjabi", "Urdu", "Nepali", "Sinhala", "Sanskrit",
+  // Southeast Asian
+  "Thai", "Burmese", "Khmer", "Lao",
+  // Middle Eastern
+  "Arabic", "Hebrew", "Persian", "Kurdish", "Pashto", "Dari",
+  // Cyrillic
+  "Russian", "Ukrainian", "Bulgarian", "Serbian", "Macedonian", "Belarusian", 
+  "Mongolian", "Kazakh",
+  // Other scripts
+  "Greek", "Georgian", "Armenian", "Amharic", "Tigrinya"
+]);
+
+// Languages that are written right-to-left
+const RTL_LANGUAGES = new Set([
+  "Arabic", "Hebrew", "Persian", "Urdu", "Pashto", "Dari", "Kurdish"
+]);
+
+// Languages known to be well-supported by AI models
+const SUPPORTED_LANGUAGES = new Set([
+  "English", "Spanish", "French", "German", "Italian", "Portuguese", "Russian",
+  "Chinese", "Japanese", "Korean", "Arabic", "Hindi", "Dutch", "Greek", "Polish",
+  "Swedish", "Norwegian", "Danish", "Finnish", "Czech", "Hungarian", "Romanian",
+  "Ukrainian", "Turkish", "Bulgarian", "Croatian", "Serbian", "Slovak", "Slovenian",
+  "Lithuanian", "Latvian", "Estonian", "Vietnamese", "Thai", "Indonesian", "Malay",
+  "Filipino", "Tagalog", "Bengali", "Tamil", "Telugu", "Marathi", "Gujarati",
+  "Kannada", "Malayalam", "Punjabi", "Urdu", "Hebrew", "Persian", "Swahili",
+  "Catalan", "Basque", "Galician", "Irish", "Welsh", "Icelandic", "Albanian",
+  "Macedonian", "Bosnian", "Georgian", "Armenian", "Azerbaijani", "Kazakh",
+  "Uzbek", "Nepali", "Sinhala", "Amharic", "Afrikaans", "Latin"
+]);
+
 export function VoiceChat() {
-  const { user, isAnonymous, effectiveUserId, getEphemeralToken, login, languages } = useAuth();
+  const { user, isAnonymous, effectiveUserId, getEphemeralToken, login, languages, scriptModes, setScriptMode } = useAuth();
   
   const [selectedLanguage, setSelectedLanguage] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<ProviderType>("gemini");
@@ -91,6 +130,11 @@ export function VoiceChat() {
   }, [languages, selectedLanguage]);
 
   const lang = selectedLanguage || "Spanish";
+  const isNonLatinLanguage = NON_LATIN_LANGUAGES.has(lang);
+  // Default to true (Latin letters) for non-Latin languages if not set
+  const useLatinLetters = isNonLatinLanguage ? (scriptModes[lang] ?? true) : false;
+  // Check if language is well-supported
+  const isLanguageSupported = SUPPORTED_LANGUAGES.has(lang);
 
   // Helper to make API calls with auth headers
   const authFetch = useCallback((url: string, options: RequestInit = {}) => {
@@ -178,19 +222,36 @@ export function VoiceChat() {
     saveMessages();
   }, [messages, isLoading, effectiveUserId, authFetch]);
 
-  const systemInstruction = `You are a friendly language tutor helping someone practice ${lang}. Speak ONLY in ${lang} at all times.
+  const romanizationRule = isNonLatinLanguage && useLatinLetters ? `
+IMPORTANT - USE LATIN LETTERS:
+ALWAYS use romanized/transliterated text instead of native script:
+- Chinese: Use pinyin (e.g., "Nǐ hǎo" not "你好")
+- Japanese: Use romaji (e.g., "Konnichiwa" not "こんにちは")
+- Korean: Use romanization (e.g., "Annyeonghaseyo" not "안녕하세요")
+- Arabic: Use transliteration (e.g., "Marhaba" not "مرحبا")
+- Hindi: Use transliteration (e.g., "Namaste" not "नमस्ते")
+- Greek: Use transliteration (e.g., "Kalimera" not "Καλημέρα")
+- Russian: Use transliteration (e.g., "Privet" not "Привет")
+- Hebrew: Use transliteration (e.g., "Shalom" not "שלום")
+- For any other non-Latin script: Use standard romanization
+This helps learners focus on speaking without needing to learn new alphabets.
+` : "";
 
-Control tokens (never mention or acknowledge these directly):
+  const systemInstruction = `You are a friendly language tutor helping someone practice ${lang}. Speak ONLY in ${lang} at all times.
+${romanizationRule}
+Control tokens (respond to these but never mention or acknowledge them directly):
 - <START> - Begin a new conversation with a warm greeting and simple question
 - <CONTINUE> - Resume conversation naturally from where you left off
-- <CONTEXT date="..." time="..." timezone="..." location="..." /> - Background info about the user. DO NOT explicitly mention these facts. Use them subtly: appropriate greeting for time of day, awareness of local context. Only mention directly if truly relevant to conversation.
+- <CONTEXT date="..." time="..." timezone="..." location="..." /> - Background info about the user. Use subtly, don't explicitly mention unless relevant.
+- <LANGUAGE_SWITCH to="..." /> - IMMEDIATELY switch to the specified language. From that point, speak ONLY in the new language.
+- <SCRIPT_MODE mode="latin|native" /> - Switch how you write: "latin" = use romanized letters (pinyin, romaji, etc.), "native" = use the language's native script.
 
 Game tokens (seamlessly integrate into conversation):
 IMPORTANT RULES FOR ALL GAMES:
 1. Do 3 rounds automatically, then ask if the user wants to continue.
 2. Be CRITICAL and PRECISE with feedback - don't just say "good job!" The user wants to learn, so point out ALL errors, mispronunciations, grammar issues, and areas for improvement. Be constructive but thorough - being too nice doesn't help them improve.
 
-- <GAME type="read-aloud" /> - Generate a short text (1-3 sentences) in ${lang} for the user to read aloud. Say a brief intro, then say "READ_ALOUD:" followed by the exact text (DO NOT say the text before the marker). The text will be displayed visually. Wait for the user to read it, then give DETAILED and CRITICAL feedback on pronunciation: identify exact mispronounced words, explain correct pronunciation phonetically, note rhythm/intonation issues. Be thorough and honest, not just nice. After 3 texts, ask if they want to continue.
+- <GAME type="read-aloud" /> - Generate a short text (1-3 sentences) in ${lang} for the user to read aloud. Say a brief intro, then say "READ_ALOUD:" followed by the exact text in romanized form (DO NOT say the text before the marker). The text will be displayed visually. Wait for the user to read it, then give DETAILED and CRITICAL feedback on pronunciation: identify exact mispronounced words, explain correct pronunciation phonetically, note rhythm/intonation issues. Be thorough and honest, not just nice. After 3 texts, ask if they want to continue.
 
 - <GAME type="guess-word" /> - Think of a word/concept in ${lang} appropriate for the user's level. Describe it WITHOUT saying the word: what category it belongs to, what it looks/sounds/feels like, where you find it, what you do with it. Give 2-3 clues initially. If user guesses wrong, give another hint. If correct, celebrate and move to the next word. If stuck after 3 guesses, reveal the answer. After 3 words, ask if they want to continue.
 
@@ -208,14 +269,20 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
       const isSealed = lastMessage && sealedMessageIdsRef.current.has(lastMessage.id);
       
       if (isSealed || !lastMessage || lastMessage.role !== "user") {
-        return [...prev, { id: crypto.randomUUID(), role: "user", content: text }];
+        return [...prev, { 
+          id: crypto.randomUUID(), 
+          role: "user", 
+          content: text,
+          language: lang,
+          useLatinLetters,
+        }];
       }
       return [
         ...prev.slice(0, -1),
         { ...lastMessage, content: lastMessage.content + text },
       ];
     });
-  }, []);
+  }, [lang, useLatinLetters]);
 
   // Handle model speech transcription - append to existing bubble if same speaker and not sealed
   const handleModelTranscript = useCallback((text: string) => {
@@ -224,14 +291,20 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
       const isSealed = lastMessage && sealedMessageIdsRef.current.has(lastMessage.id);
       
       if (isSealed || !lastMessage || lastMessage.role !== "assistant") {
-        return [...prev, { id: crypto.randomUUID(), role: "assistant", content: text }];
+        return [...prev, { 
+          id: crypto.randomUUID(), 
+          role: "assistant", 
+          content: text,
+          language: lang,
+          useLatinLetters,
+        }];
       }
       return [
         ...prev.slice(0, -1),
         { ...lastMessage, content: lastMessage.content + text },
       ];
     });
-  }, []);
+  }, [lang, useLatinLetters]);
 
   const liveProvider = useLiveProvider({
     provider: selectedProvider,
@@ -418,12 +491,70 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
             if (liveProvider.status === "connected") {
               // Seal all current messages to force fresh bubble
               messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
+              // Include script mode for the NEW language (not current)
+              const isNewLangNonLatin = NON_LATIN_LANGUAGES.has(newLang);
+              const newLangUseLatinLetters = isNewLangNonLatin ? (scriptModes[newLang] ?? true) : false;
+              const scriptMode = isNewLangNonLatin && newLangUseLatinLetters ? "latin" : "native";
+              const scriptInstruction = isNewLangNonLatin && newLangUseLatinLetters 
+                ? ` Use ROMANIZED/LATIN letters only (e.g., romaji for Japanese, pinyin for Chinese).`
+                : "";
               liveProvider.sendPrompt(
-                `Please switch to ${newLang} now. From this point on, speak ONLY in ${newLang}. Acknowledge the switch briefly in ${newLang}.`
+                `<LANGUAGE_SWITCH to="${newLang}" script="${scriptMode}" /> IMPORTANT: From this point forward, you are now teaching ${newLang}. Speak ONLY in ${newLang}.${scriptInstruction} Greet the user briefly in ${newLang}.`
               );
             }
           }}
         />
+        
+        {/* Latin letters toggle - only for non-Latin script languages */}
+        {isNonLatinLanguage && (
+          <div className="flex items-center justify-center gap-3 mt-3">
+            <button
+              onClick={() => {
+                const newValue = !useLatinLetters;
+                setScriptMode(lang, newValue);
+                if (liveProvider.status === "connected") {
+                  // Seal messages for fresh bubble
+                  messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
+                  if (newValue) {
+                    liveProvider.sendPrompt(
+                      `<SCRIPT_MODE mode="latin" /> From now on, ALWAYS use romanized/Latin letters instead of native script. For example: use "Nǐ hǎo" not "你好", use "Konnichiwa" not "こんにちは". Acknowledge briefly.`
+                    );
+                  } else {
+                    liveProvider.sendPrompt(
+                      `<SCRIPT_MODE mode="native" /> From now on, use the native script/alphabet of the language (not romanization). For example: use "你好" not "Nǐ hǎo", use "こんにちは" not "Konnichiwa". Acknowledge briefly.`
+                    );
+                  }
+                }
+              }}
+              className={`relative w-11 h-6 rounded-full transition-colors duration-200 border ${
+                useLatinLetters 
+                  ? "bg-primary/20 border-primary" 
+                  : "bg-secondary/50 border-border"
+              }`}
+              role="switch"
+              aria-checked={useLatinLetters}
+            >
+              <span
+                className={`absolute top-1/2 -translate-y-1/2 left-0.5 w-5 h-5 rounded-full shadow-sm transition-transform duration-200 ${
+                  useLatinLetters 
+                    ? "translate-x-[18px] bg-primary" 
+                    : "translate-x-0 bg-muted-foreground/50"
+                }`}
+              />
+            </button>
+            <span className="text-sm text-muted-foreground flex items-center gap-1.5">
+              Latin letters
+              <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground/80">ABC</span>
+            </span>
+          </div>
+        )}
+        
+        {/* Disclaimer for unsupported languages */}
+        {!isLanguageSupported && (
+          <p className="text-center text-xs text-amber-500/80 mt-3 px-4">
+            ⚠️ {lang} may not be well supported by AI models. Quality may vary.
+          </p>
+        )}
       </div>
 
       {/* Provider Selector */}

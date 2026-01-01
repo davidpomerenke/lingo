@@ -8,6 +8,7 @@ interface User {
   id: string;
   email: string;
   languages: string[];
+  script_modes: Record<string, boolean>;
 }
 
 interface AuthContextType {
@@ -16,7 +17,9 @@ interface AuthContextType {
   isAnonymous: boolean;
   effectiveUserId: string | null;
   languages: string[];
+  scriptModes: Record<string, boolean>; // Per-language: true = Latin letters, false = native
   setLanguages: (languages: string[]) => Promise<void>;
+  setScriptMode: (language: string, useLatinLetters: boolean) => Promise<void>;
   login: (email: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   getEphemeralToken: (provider: "gemini" | "openai") => Promise<string | null>;
@@ -27,12 +30,14 @@ const AuthContext = createContext<AuthContextType | null>(null);
 const SESSION_KEY = "lingo_session";
 const ANON_KEY = "lingo_anon_id";
 const LANGUAGES_KEY = "lingo_languages";
+const SCRIPT_MODES_KEY = "lingo_script_modes";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [anonId, setAnonId] = useState<string | null>(null);
   const [languages, setLanguagesState] = useState<string[]>(DEFAULT_LANGUAGES);
+  const [scriptModes, setScriptModesState] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
 
   // Check for session on mount
@@ -50,13 +55,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setAnonId(storedAnonId);
       
-      // Load languages from localStorage for anonymous users
+      // Load languages and script modes from localStorage for anonymous users
       const storedLanguages = localStorage.getItem(LANGUAGES_KEY);
       if (storedLanguages) {
         try {
           setLanguagesState(JSON.parse(storedLanguages));
         } catch {
           // Invalid JSON, use defaults
+        }
+      }
+      
+      const storedScriptModes = localStorage.getItem(SCRIPT_MODES_KEY);
+      if (storedScriptModes) {
+        try {
+          setScriptModesState(JSON.parse(storedScriptModes));
+        } catch {
+          // Invalid JSON, use empty object
         }
       }
       
@@ -67,6 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         // Migrate anonymous data to this user
         const anonLanguages = localStorage.getItem(LANGUAGES_KEY);
+        const anonScriptModes = localStorage.getItem(SCRIPT_MODES_KEY);
         try {
           await fetch("/api/auth/migrate", {
             method: "POST",
@@ -77,11 +92,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ 
               anonId: storedAnonId,
               languages: anonLanguages ? JSON.parse(anonLanguages) : null,
+              scriptModes: anonScriptModes ? JSON.parse(anonScriptModes) : null,
             }),
           });
           // Clear anon data after migration
           localStorage.removeItem(ANON_KEY);
           localStorage.removeItem(LANGUAGES_KEY);
+          localStorage.removeItem(SCRIPT_MODES_KEY);
           setAnonId(null);
         } catch (e) {
           console.error("Failed to migrate:", e);
@@ -105,6 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (data.user) {
               setUser(data.user);
               setLanguagesState(data.user.languages || DEFAULT_LANGUAGES);
+              setScriptModesState(data.user.script_modes || {});
             } else {
               localStorage.removeItem(SESSION_KEY);
               setSessionId(null);
@@ -192,6 +210,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [sessionId]);
 
+  const setScriptMode = useCallback(async (language: string, useLatinLetters: boolean) => {
+    const newScriptModes = { ...scriptModes, [language]: useLatinLetters };
+    setScriptModesState(newScriptModes);
+    
+    if (sessionId) {
+      // Save to server for authenticated users
+      try {
+        await fetch("/api/user/languages", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "x-session-id": sessionId,
+          },
+          body: JSON.stringify({ scriptModes: newScriptModes }),
+        });
+        // Update user object
+        setUser(prev => prev ? { ...prev, script_modes: newScriptModes } : null);
+      } catch (e) {
+        console.error("Failed to save script mode:", e);
+      }
+    } else {
+      // Save to localStorage for anonymous users
+      localStorage.setItem(SCRIPT_MODES_KEY, JSON.stringify(newScriptModes));
+    }
+  }, [sessionId, scriptModes]);
+
   const getEphemeralToken = useCallback(async (provider: "gemini" | "openai"): Promise<string | null> => {
     try {
       const res = await fetch("/api/auth/ephemeral-token", {
@@ -227,7 +271,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAnonymous,
       effectiveUserId,
       languages,
+      scriptModes,
       setLanguages,
+      setScriptMode,
       login, 
       logout, 
       getEphemeralToken 

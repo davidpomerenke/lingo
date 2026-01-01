@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { initDb, getSession, getUserById, migrateAnonMessages, updateUserLanguages } from "@/lib/db";
+import { initDb, getSession, getUserById, migrateAnonMessages, updateUserLanguages, updateUserScriptModes } from "@/lib/db";
 
 export async function POST(request: NextRequest) {
   try {
@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    const { anonId, languages } = await request.json();
+    const { anonId, languages, scriptModes } = await request.json();
 
     let migratedCount = 0;
     
@@ -33,6 +33,11 @@ export async function POST(request: NextRequest) {
     // Migrate language preferences if provided
     if (languages && Array.isArray(languages) && languages.length > 0) {
       await updateUserLanguages(user.id, languages);
+    }
+
+    // Migrate script mode preferences if provided
+    if (scriptModes && typeof scriptModes === "object") {
+      await updateUserScriptModes(user.id, scriptModes);
     }
 
     return NextResponse.json({ 
