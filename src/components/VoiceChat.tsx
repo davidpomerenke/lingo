@@ -418,6 +418,8 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
   messagesRef.current = messages; // Keep ref updated
   const langRef = useRef(lang);
   langRef.current = lang;
+  const useLatinLettersRef = useRef(useLatinLetters);
+  useLatinLettersRef.current = useLatinLetters;
 
   // Generate suggestions when AI stops speaking (5 second delay, once per turn)
   useEffect(() => {
@@ -471,12 +473,14 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
       lastAiMessageIdForSuggestionsRef.current = lastAssistantMessage.id;
 
       try {
+        const currentUseLatinLetters = useLatinLettersRef.current;
         const res = await fetch("/api/suggestions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             conversationHistory: currentMessages.slice(-6).map(m => ({ role: m.role, content: m.content })),
             targetLanguage: currentLang,
+            useLatinLetters: currentUseLatinLetters,
           }),
         });
 

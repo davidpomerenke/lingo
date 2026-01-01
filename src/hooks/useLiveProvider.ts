@@ -273,12 +273,15 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     providerRef.current?.updateInputLanguage?.(language);
   }, [status]);
 
+  // Combined state: model is "speaking" if generating OR if audio is still playing
+  const isSpeakingOrPlaying = isModelSpeaking || audioPlayer.isPlaying;
+
   return {
     status,
     currentProvider,
     error,
     isRecording: audioRecorder.isRecording,
-    isModelSpeaking,
+    isModelSpeaking: isSpeakingOrPlaying, // Use combined state so UI waits for audio to finish
     connect,
     disconnect,
     switchProvider,

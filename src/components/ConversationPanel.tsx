@@ -37,6 +37,7 @@ interface TooltipData {
   text: string;
   x: number;
   y: number;
+  language: string;
   translation?: string;
   romanization?: string;
   words?: WordBreakdown[];
@@ -163,10 +164,40 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, 
     return null;
   }, [messages]);
 
-  const fetchTranslation = useCallback(async (text: string, x: number, y: number, sourceMessage?: Message | null) => {
-    setTooltip({ text, x, y, loading: true });
+  // Play TTS audio for selected text
+  const playTTS = useCallback(async (text: string, language: string) => {
+    try {
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, language }),
+      });
 
+      if (!response.ok) return;
+
+      const data = await response.json();
+      if (data.audio) {
+        // Create audio from base64
+        const audioData = atob(data.audio);
+        const audioArray = new Uint8Array(audioData.length);
+        for (let i = 0; i < audioData.length; i++) {
+          audioArray[i] = audioData.charCodeAt(i);
+        }
+        const audioBlob = new Blob([audioArray], { type: data.mimeType });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        audio.onended = () => URL.revokeObjectURL(audioUrl);
+        audio.play().catch(console.error);
+      }
+    } catch (error) {
+      console.error("TTS error:", error);
+    }
+  }, []);
+
+  const fetchTranslation = useCallback(async (text: string, x: number, y: number, sourceMessage?: Message | null) => {
     const targetLanguage = sourceMessage?.language || currentLanguage || "English";
+    setTooltip({ text, x, y, language: targetLanguage, loading: true });
+
     const context = sourceMessage?.content; // Full bubble text for context
 
     try {
@@ -421,17 +452,6 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, 
               );
             })}
             
-            {isModelSpeaking && (
-              <div className="flex justify-start">
-                <div className="bg-secondary px-4 py-2 rounded-2xl rounded-bl-sm">
-                  <div className="flex items-center gap-1">
-                    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: "0s" }} />
-                    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: "0.15s" }} />
-                    <div className="w-2 h-2 rounded-full bg-primary animate-bounce" style={{ animationDelay: "0.3s" }} />
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -519,6 +539,20 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, 
                   {tooltip.explanation}
                 </div>
               )}
+              
+              {/* TTS button */}
+              <button
+                onClick={() => playTTS(tooltip.text, tooltip.language)}
+                className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                title="Listen to pronunciation"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                </svg>
+                Listen
+              </button>
             </div>
           )}
         </div>
