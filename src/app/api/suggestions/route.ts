@@ -1,0 +1,55 @@
+import { NextRequest, NextResponse } from "next/server";
+import { GoogleGenAI } from "@google/genai";
+
+const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+
+export async function POST(req: NextRequest) {
+  try {
+    const { conversationHistory, targetLanguage } = await req.json();
+
+    if (!targetLanguage) {
+      return NextResponse.json(
+        { error: "Missing targetLanguage" },
+        { status: 400 }
+      );
+    }
+
+    // Build context from recent conversation
+    const recentMessages = conversationHistory?.slice(-6) || [];
+    const contextText = recentMessages
+      .map((m: { role: string; content: string }) => `${m.role}: ${m.content}`)
+      .join("\n");
+
+    const prompt = `You are helping a language learner practice ${targetLanguage}. Based on the conversation below, suggest 3 natural responses the learner could say next.
+
+${contextText ? `Recent conversation:\n${contextText}\n\n` : ""}Generate exactly 3 short, natural responses in ${targetLanguage} that would continue this conversation naturally. Each response should be different in tone or content (e.g., one could ask a question, one could share an opinion, one could be more casual).
+
+Output ONLY a JSON array of 3 strings, nothing else:
+["response 1", "response 2", "response 3"]`;
+
+    const result = await genai.models.generateContent({
+      model: "gemini-2.5-flash-lite",
+      contents: prompt,
+    });
+
+    const responseText = result.text || "";
+    
+    // Parse JSON array from response
+    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      const suggestions = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(suggestions) && suggestions.length > 0) {
+        return NextResponse.json({ suggestions: suggestions.slice(0, 3) });
+      }
+    }
+
+    return NextResponse.json({ suggestions: [] });
+  } catch (error) {
+    console.error("Suggestions error:", error);
+    return NextResponse.json(
+      { error: "Failed to generate suggestions" },
+      { status: 500 }
+    );
+  }
+}
+

@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 
 // RTL languages
 const RTL_LANGUAGES = new Set([
@@ -22,6 +22,8 @@ interface ConversationPanelProps {
   messages: Message[];
   isModelSpeaking: boolean;
   currentLanguage?: string;
+  suggestions?: string[];
+  suggestionsAfterMessageIndex?: number;
 }
 
 interface WordBreakdown {
@@ -105,7 +107,7 @@ function isMessageRTL(message: Message): boolean {
   return RTL_LANGUAGES.has(message.language);
 }
 
-export function ConversationPanel({ messages, isModelSpeaking, currentLanguage }: ConversationPanelProps) {
+export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, suggestions = [], suggestionsAfterMessageIndex = -1 }: ConversationPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const firstMessageRef = useRef<HTMLDivElement>(null);
@@ -146,7 +148,7 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage }
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, suggestions]);
 
   // Find message from DOM element by traversing up to find data-message-id
   const findMessageFromElement = useCallback((element: Node | null): Message | null => {
@@ -317,7 +319,7 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage }
       <div
         ref={scrollRef}
         className={cn(
-          "h-48 overflow-y-auto px-4 py-3",
+          "h-72 overflow-y-auto px-4 py-3",
           "scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent"
         )}
         onMouseUp={handleMouseUp}
@@ -333,60 +335,89 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage }
             {messages.map((message, index) => {
               const rtl = isMessageRTL(message);
               const isFirstAssistant = message.id === firstAssistantMessage?.id;
+              // Show suggestions after the message at suggestionsAfterMessageIndex
+              const showSuggestionsAfterThis = index === suggestionsAfterMessageIndex && suggestions.length > 0 && !isModelSpeaking;
+              
               return (
-                <div
-                  key={message.id}
-                  ref={isFirstAssistant ? firstMessageRef : undefined}
-                  className={cn(
-                    "flex relative",
-                    message.role === "user" ? "justify-end" : "justify-start"
-                  )}
-                >
+                <React.Fragment key={message.id}>
                   <div
-                    dir={rtl ? "rtl" : "ltr"}
-                    data-message-id={message.id}
+                    ref={isFirstAssistant ? firstMessageRef : undefined}
                     className={cn(
-                      "max-w-[85%] px-4 py-2 rounded-2xl text-sm select-text cursor-text",
-                      message.role === "user"
-                        ? "bg-primary/20 text-foreground rounded-br-sm"
-                        : "bg-secondary text-foreground rounded-bl-sm",
-                      rtl && "text-right"
+                      "flex relative",
+                      message.role === "user" ? "justify-end" : "justify-start"
                     )}
                   >
-                    {message.content}
-                  </div>
-
-                  {/* Onboarding tooltip - appears below first assistant message */}
-                  {isFirstAssistant && showOnboarding && (
                     <div
+                      dir={rtl ? "rtl" : "ltr"}
+                      data-message-id={message.id}
                       className={cn(
-                        "absolute left-0 top-full z-50",
-                        "animate-in fade-in slide-in-from-top-2 duration-300"
+                        "max-w-[85%] px-4 py-2 rounded-2xl text-sm select-text cursor-text",
+                        message.role === "user"
+                          ? "bg-primary/20 text-foreground rounded-br-sm"
+                          : "bg-secondary text-foreground rounded-bl-sm",
+                        rtl && "text-right"
                       )}
-                      style={{ marginTop: "-8px" }}
                     >
-                      {/* Primary color triangle pointing up into text */}
-                      <div 
-                        className="absolute left-5 w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-b-[14px] border-b-primary"
-                        style={{ top: "-12px" }}
-                      />
-                      <div 
-                        className="relative bg-popover text-popover-foreground px-3 py-2 rounded-lg border-[1.5px] border-primary shadow-lg shadow-primary/20"
+                      {message.content}
+                    </div>
+
+                    {/* Onboarding tooltip - appears below first assistant message */}
+                    {isFirstAssistant && showOnboarding && (
+                      <div
+                        className={cn(
+                          "absolute left-0 top-full z-50",
+                          "animate-in fade-in slide-in-from-top-2 duration-300"
+                        )}
+                        style={{ marginTop: "-8px" }}
                       >
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-base">💡</span>
-                          <p className="text-sm">Select any text to translate it!</p>
-                          <button
-                            onClick={dismissOnboarding}
-                            className="ml-auto px-3 py-1 text-xs font-medium rounded-md bg-primary/20 text-primary hover:bg-primary/30 transition-colors"
-                          >
-                            Got it
-                          </button>
+                        {/* Primary color triangle pointing up into text */}
+                        <div 
+                          className="absolute left-5 w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-b-[14px] border-b-primary"
+                          style={{ top: "-12px" }}
+                        />
+                        <div 
+                          className="relative bg-popover text-popover-foreground px-3 py-2 rounded-lg border-[1.5px] border-primary shadow-lg shadow-primary/20"
+                        >
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-base">💡</span>
+                            <p className="text-sm">Select any text to translate it!</p>
+                            <button
+                              onClick={dismissOnboarding}
+                              className="ml-auto px-3 py-1 text-xs font-medium rounded-md bg-primary/20 text-primary hover:bg-primary/30 transition-colors"
+                            >
+                              Got it
+                            </button>
+                          </div>
                         </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Suggestions - shown inline after the message where they were generated */}
+                  {showSuggestionsAfterThis && (
+                    <div className="flex justify-end animate-in fade-in slide-in-from-bottom-2 duration-500">
+                      <div className="max-w-[85%] space-y-2">
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 text-right mb-1">
+                          You could say...
+                        </div>
+                        {suggestions.map((suggestion, i) => (
+                          <div
+                            key={i}
+                            data-suggestion={i}
+                            className={cn(
+                              "px-3 py-1.5 rounded-xl text-sm cursor-text select-text",
+                              "bg-primary/5 border border-dashed border-primary/30 text-foreground/70",
+                              "animate-in fade-in slide-in-from-right-2 duration-300"
+                            )}
+                            style={{ animationDelay: `${i * 100}ms`, animationFillMode: "backwards" }}
+                          >
+                            {suggestion}
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
-                </div>
+                </React.Fragment>
               );
             })}
             

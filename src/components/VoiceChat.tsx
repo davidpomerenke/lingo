@@ -135,12 +135,17 @@ export function VoiceChat() {
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
   const [signInEmail, setSignInEmail] = useState("");
   const [signInStatus, setSignInStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestionsAfterMessageIndex, setSuggestionsAfterMessageIndex] = useState<number>(-1);
   
   // Track which message triggered the card and how many messages after it to keep it visible
   const cardSourceMessageIdRef = useRef<string | null>(null);
   const lastSavedRef = useRef<Map<string, string>>(new Map());
   // Track "sealed" message IDs - messages we should never append to
   const sealedMessageIdsRef = useRef<Set<string>>(new Set());
+  // Track suggestion generation to only do once per AI turn
+  const suggestionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastAiMessageIdForSuggestionsRef = useRef<string | null>(null);
 
   // Set initial language from user's languages
   useEffect(() => {
@@ -406,6 +411,89 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
       }
     }
   }, [messages]); // Only depend on messages, not readAloudText
+
+  // Track previous isModelSpeaking state to detect when model STOPS speaking
+  const wasModelSpeakingRef = useRef(false);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages; // Keep ref updated
+  const langRef = useRef(lang);
+  langRef.current = lang;
+
+  // Generate suggestions when AI stops speaking (5 second delay, once per turn)
+  useEffect(() => {
+    const wasModelSpeaking = wasModelSpeakingRef.current;
+    wasModelSpeakingRef.current = liveProvider.isModelSpeaking;
+
+    // Clear suggestions and timer if model starts speaking again
+    if (liveProvider.isModelSpeaking && wasModelSpeaking === false) {
+      // Model just started speaking - clear old suggestions
+      setSuggestions([]);
+      setSuggestionsAfterMessageIndex(-1);
+    }
+
+    // Clear timer if model starts speaking or disconnects
+    if (liveProvider.status !== "connected" || liveProvider.isModelSpeaking) {
+      if (suggestionTimerRef.current) {
+        clearTimeout(suggestionTimerRef.current);
+        suggestionTimerRef.current = null;
+      }
+      return;
+    }
+
+    // Only start timer when model just STOPPED speaking (transition from true to false)
+    if (!wasModelSpeaking) {
+      return; // Model wasn't speaking before, so this isn't a "stop" event
+    }
+
+    // Timer already running from a previous stop
+    if (suggestionTimerRef.current) {
+      return;
+    }
+
+    // Start 5-second timer to generate suggestions
+    suggestionTimerRef.current = setTimeout(async () => {
+      suggestionTimerRef.current = null;
+      
+      // Use refs to get current values
+      const currentMessages = messagesRef.current;
+      const currentLang = langRef.current;
+      
+      // Find the last assistant message
+      const lastAssistantMessage = [...currentMessages].reverse().find(m => m.role === "assistant");
+      if (!lastAssistantMessage) return;
+
+      // Check if we already generated suggestions for this AI turn
+      if (lastAiMessageIdForSuggestionsRef.current === lastAssistantMessage.id) {
+        return;
+      }
+      
+      // Mark this turn as processed
+      lastAiMessageIdForSuggestionsRef.current = lastAssistantMessage.id;
+
+      try {
+        const res = await fetch("/api/suggestions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversationHistory: currentMessages.slice(-6).map(m => ({ role: m.role, content: m.content })),
+            targetLanguage: currentLang,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.suggestions && data.suggestions.length > 0) {
+            setSuggestions(data.suggestions);
+            // Remember where to show suggestions (after current last message)
+            setSuggestionsAfterMessageIndex(currentMessages.length - 1);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch suggestions:", err);
+      }
+    }, 5000);
+  }, [liveProvider.status, liveProvider.isModelSpeaking]);
+
 
   // Handle orb click - simple on/off toggle
   const handleOrbClick = async () => {
@@ -680,6 +768,8 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
             messages={messages}
             isModelSpeaking={liveProvider.isModelSpeaking}
             currentLanguage={selectedLanguage}
+            suggestions={suggestions}
+            suggestionsAfterMessageIndex={suggestionsAfterMessageIndex}
           />
         </div>
       )}
