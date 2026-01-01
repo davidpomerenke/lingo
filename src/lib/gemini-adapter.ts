@@ -46,7 +46,13 @@ export class GeminiLiveAdapter implements LiveProvider {
   constructor(config: LiveProviderConfig, callbacks: LiveProviderCallbacks = {}) {
     this.config = config;
     this.callbacks = callbacks;
-    this.ai = new GoogleGenAI({ apiKey: config.apiKey });
+    
+    // Ephemeral tokens start with "auth_tokens/" and require v1alpha API version
+    const isEphemeralToken = config.apiKey.startsWith("auth_tokens/");
+    this.ai = new GoogleGenAI({ 
+      apiKey: config.apiKey,
+      ...(isEphemeralToken && { httpOptions: { apiVersion: "v1alpha" } }),
+    });
   }
 
   async connect(): Promise<void> {

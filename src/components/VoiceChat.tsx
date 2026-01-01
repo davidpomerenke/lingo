@@ -8,6 +8,7 @@ import { ConversationPanel } from "./ConversationPanel";
 import { LanguageSelector, getLanguageByCode } from "./LanguageSelector";
 import { ProviderSelector } from "./ProviderSelector";
 import { GamePills } from "./GamePills";
+import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
 // Get user context (date, time, location)
@@ -63,17 +64,15 @@ interface Message {
   content: string;
 }
 
-interface VoiceChatProps {
-  geminiApiKey: string;
-  openaiApiKey?: string;
-}
-
-export function VoiceChat({ geminiApiKey, openaiApiKey }: VoiceChatProps) {
+export function VoiceChat() {
+  const { sessionId, getEphemeralToken } = useAuth();
+  
   const [selectedLanguage, setSelectedLanguage] = useState("es");
   const [selectedProvider, setSelectedProvider] = useState<ProviderType>("gemini");
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [readAloudText, setReadAloudText] = useState<string | null>(null);
+  
   // Track which message triggered the card and how many messages after it to keep it visible
   const cardSourceMessageIdRef = useRef<string | null>(null);
   const lastSavedRef = useRef<Map<string, string>>(new Map());
@@ -83,11 +82,24 @@ export function VoiceChat({ geminiApiKey, openaiApiKey }: VoiceChatProps) {
   const language = getLanguageByCode(selectedLanguage);
   const lang = language?.name || "Spanish";
 
+  // Helper to make authenticated API calls
+  const authFetch = useCallback((url: string, options: RequestInit = {}) => {
+    return fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        "x-session-id": sessionId || "",
+      },
+    });
+  }, [sessionId]);
+
   // Load messages from database on mount
   useEffect(() => {
+    if (!sessionId) return;
+    
     async function loadMessages() {
       try {
-        const res = await fetch("/api/messages");
+        const res = await authFetch("/api/messages");
         if (res.ok) {
           const data = await res.json();
           setMessages(data);
@@ -104,18 +116,18 @@ export function VoiceChat({ geminiApiKey, openaiApiKey }: VoiceChatProps) {
       }
     }
     loadMessages();
-  }, []);
+  }, [sessionId, authFetch]);
 
   // Save messages to database when they change
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || !sessionId) return;
 
     async function saveMessages() {
       for (const msg of messages) {
         const savedContent = lastSavedRef.current.get(msg.id);
         if (savedContent === undefined) {
           // New message - insert
-          await fetch("/api/messages", {
+          await authFetch("/api/messages", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ id: msg.id, role: msg.role, content: msg.content }),
@@ -123,7 +135,7 @@ export function VoiceChat({ geminiApiKey, openaiApiKey }: VoiceChatProps) {
           lastSavedRef.current.set(msg.id, msg.content);
         } else if (savedContent !== msg.content) {
           // Existing message - update
-          await fetch("/api/messages", {
+          await authFetch("/api/messages", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ id: msg.id, content: msg.content, update: true }),
@@ -133,7 +145,7 @@ export function VoiceChat({ geminiApiKey, openaiApiKey }: VoiceChatProps) {
       }
     }
     saveMessages();
-  }, [messages, isLoading]);
+  }, [messages, isLoading, sessionId, authFetch]);
 
   const systemInstruction = `You are a friendly language tutor helping someone practice ${lang}. Speak ONLY in ${lang} at all times.
 
@@ -190,12 +202,8 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
     });
   }, []);
 
-  // Get the appropriate API key for the selected provider
-  const currentApiKey = selectedProvider === "gemini" ? geminiApiKey : (openaiApiKey || "");
-  
   const liveProvider = useLiveProvider({
     provider: selectedProvider,
-    apiKey: currentApiKey,
     voiceName: "Kore",
     systemInstruction,
     onUserTranscript: handleUserTranscript,
@@ -253,21 +261,27 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
     }
   }, [messages]); // Only depend on messages, not readAloudText
 
-
   // Handle orb click - simple on/off toggle
   const handleOrbClick = async () => {
     if (liveProvider.status === "disconnected" || liveProvider.status === "error") {
+      // Get ephemeral token first
+      const token = await getEphemeralToken(selectedProvider);
+      if (!token) {
+        console.error("Failed to get ephemeral token");
+        return;
+      }
+      
       // Seal all existing messages before starting session
       messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
       
       // Get user context (date, time, location)
       const context = await getUserContext();
       
-      // Turn on: start or resume session
+      // Turn on: start or resume session (pass token directly)
       if (messages.length > 0) {
-        await liveProvider.startSession(messages.map(m => ({ role: m.role, content: m.content })), context);
+        await liveProvider.startSession(token, messages.map(m => ({ role: m.role, content: m.content })), context);
       } else {
-        await liveProvider.startSession([], context);
+        await liveProvider.startSession(token, [], context);
       }
     } else {
       // Turn off: disconnect (and seal current messages for next session)
@@ -286,10 +300,17 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
     cardSourceMessageIdRef.current = null;
     
     if (liveProvider.status !== "connected") {
+      // Get ephemeral token first
+      const token = await getEphemeralToken(selectedProvider);
+      if (!token) {
+        console.error("Failed to get ephemeral token");
+        return;
+      }
+      
       // Not connected - start session with game command
       const context = await getUserContext();
       const gamePrompt = `${context}\n<GAME type="${gameId}" />`;
-      await liveProvider.startSession(messages.map(m => ({ role: m.role, content: m.content })), gamePrompt, true);
+      await liveProvider.startSession(token, messages.map(m => ({ role: m.role, content: m.content })), gamePrompt, true);
     } else {
       // Already connected - just send game command
       liveProvider.sendPrompt(`<GAME type="${gameId}" />`);
@@ -318,11 +339,14 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
     
     // If session is active, switch provider (transfers context automatically)
     if (isActive) {
-      const newApiKey = newProvider === "gemini" ? geminiApiKey : (openaiApiKey || "");
+      // Get new ephemeral token for the new provider
+      const token = await getEphemeralToken(newProvider);
+      if (!token) return;
+      
       await liveProvider.switchProvider(
         newProvider,
         messages.map(m => ({ role: m.role, content: m.content })),
-        newApiKey
+        token
       );
     }
   };

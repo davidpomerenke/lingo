@@ -9,8 +9,9 @@ Learn any language through natural voice conversations with AI, powered by Googl
 - 🌍 **8 Languages** - Learn Spanish, French, German, Italian, Dutch, Japanese, Greek, and Latin
 - 💡 **Smart Feedback** - Get corrections and alternative phrasings from your AI tutor
 - 🎮 **Practice Games** - Read Aloud and Guess the Word games for focused practice
-- 💾 **Persistent Conversations** - Resume where you left off with Turso database storage
+- 💾 **Persistent Conversations** - Resume where you left off with per-user storage
 - 📍 **Context-Aware** - AI adapts greetings and topics based on time and location
+- 🔐 **Magic Link Auth** - Secure, passwordless authentication via email
 
 ## Tech Stack
 
@@ -18,9 +19,10 @@ Learn any language through natural voice conversations with AI, powered by Googl
 - **TypeScript** - Type-safe development
 - **Tailwind CSS** - Utility-first styling
 - **shadcn/ui** - Beautiful UI components
-- **Google Gemini Live API** - Real-time voice AI (native audio model)
-- **OpenAI Realtime API** - GPT-4o voice conversations
-- **Turso** - SQLite database for conversation persistence
+- **Google Gemini Live API** - Real-time voice AI with ephemeral tokens
+- **OpenAI Realtime API** - GPT-4o voice conversations with ephemeral tokens
+- **Turso** - SQLite database for users, sessions, and conversations
+- **Nodemailer** - Magic link authentication emails
 
 ## Getting Started
 
@@ -30,7 +32,8 @@ Learn any language through natural voice conversations with AI, powered by Googl
 - API keys:
   - [Google AI Studio](https://aistudio.google.com/apikey) for Gemini
   - [OpenAI Platform](https://platform.openai.com/api-keys) for OpenAI (optional)
-- [Turso](https://turso.tech) database (for persistence)
+- [Turso](https://turso.tech) database
+- SMTP email account (for magic link auth)
 
 ### Installation
 
@@ -47,10 +50,22 @@ Learn any language through natural voice conversations with AI, powered by Googl
 
 3. Create `.env.local` with your credentials:
    ```env
-   NEXT_PUBLIC_GEMINI_API_KEY=your_gemini_key
-   NEXT_PUBLIC_OPENAI_API_KEY=your_openai_key
+   # AI Provider Keys (server-side, secure)
+   GEMINI_API_KEY=your_gemini_key
+   OPENAI_API_KEY=your_openai_key
+
+   # Database
    TURSO_DATABASE_URL=libsql://your-db.turso.io
    TURSO_AUTH_TOKEN=your_turso_token
+
+   # Email (for magic link auth)
+   SMTP_HOST=mail.privateemail.com
+   SMTP_PORT=465
+   SMTP_USER=hello@yourdomain.com
+   SMTP_PASS=your_email_password
+
+   # App URL (for magic links)
+   NEXT_PUBLIC_APP_URL=http://localhost:3000
    ```
 
 4. Run the development server:
@@ -60,40 +75,54 @@ Learn any language through natural voice conversations with AI, powered by Googl
 
 5. Open [http://localhost:3000](http://localhost:3000)
 
+## Security
+
+API keys are kept secure on the server. When users connect to voice AI:
+1. Client requests an ephemeral token from the server
+2. Server generates a short-lived token (30 min) using the real API key
+3. Client uses the ephemeral token for direct WebSocket connection
+4. Real API keys are never exposed to the browser
+
 ## Usage
 
-1. Select the language you want to learn
-2. Choose your AI provider (Gemini or OpenAI)
-3. Click the orb to start a conversation
-4. Speak naturally - the AI will respond in your target language
-5. Try practice games for focused learning!
+1. Sign in with your email (magic link)
+2. Select the language you want to learn
+3. Choose your AI provider (Gemini or OpenAI)
+4. Click the orb to start a conversation
+5. Speak naturally - the AI will respond in your target language
+6. Try practice games for focused learning!
 
 ## Project Structure
 
 ```
 src/
 ├── app/
-│   ├── api/messages/       # Conversation persistence API
-│   ├── globals.css         # Global styles and theme
-│   ├── layout.tsx          # Root layout
-│   └── page.tsx            # Main page
+│   ├── api/
+│   │   ├── auth/           # Auth endpoints (login, verify, logout, me, ephemeral-token)
+│   │   └── messages/       # Conversation persistence
+│   ├── login/              # Login page
+│   ├── globals.css
+│   ├── layout.tsx
+│   └── page.tsx
 ├── components/
 │   ├── ui/                 # shadcn/ui components
 │   ├── ConversationPanel.tsx
-│   ├── GamePills.tsx       # Practice game buttons
+│   ├── GamePills.tsx
 │   ├── LanguageSelector.tsx
-│   ├── ProviderSelector.tsx # Gemini/OpenAI toggle
-│   ├── VoiceChat.tsx       # Main voice chat interface
-│   └── VoiceOrb.tsx        # Animated voice button
+│   ├── ProviderSelector.tsx
+│   ├── VoiceChat.tsx
+│   └── VoiceOrb.tsx
 ├── hooks/
-│   ├── useAudioPlayer.ts   # Audio playback
-│   ├── useAudioRecorder.ts # Microphone recording
-│   └── useLiveProvider.ts  # Unified AI provider hook
+│   ├── useAudioPlayer.ts
+│   ├── useAudioRecorder.ts
+│   └── useLiveProvider.ts
 └── lib/
-    ├── db.ts               # Turso database client
-    ├── gemini-adapter.ts   # Gemini Live implementation
-    ├── live-provider.ts    # Provider interface
-    ├── openai-adapter.ts   # OpenAI Realtime implementation
+    ├── auth-context.tsx    # React auth context
+    ├── db.ts               # Turso database (users, sessions, messages)
+    ├── email.ts            # Magic link emails
+    ├── gemini-adapter.ts
+    ├── live-provider.ts
+    ├── openai-adapter.ts
     └── utils.ts
 ```
 

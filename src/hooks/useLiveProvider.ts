@@ -26,7 +26,6 @@ export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "er
 
 interface UseLiveProviderOptions {
   provider: ProviderType;
-  apiKey: string;
   voiceName?: string;
   systemInstruction: string;
   functions?: FunctionDefinition[];
@@ -38,7 +37,6 @@ interface UseLiveProviderOptions {
 export function useLiveProvider(options: UseLiveProviderOptions) {
   const { 
     provider, 
-    apiKey, 
     voiceName, 
     systemInstruction, 
     functions,
@@ -120,10 +118,13 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     },
   }), [audioPlayer]);
 
+  // Store current API key in ref so it persists across connect calls
+  const apiKeyRef = useRef<string>("");
+
   // Create provider instance
-  const createProvider = useCallback((type: ProviderType, customApiKey?: string): LiveProvider => {
+  const createProvider = useCallback((type: ProviderType, apiKey: string): LiveProvider => {
     const config: LiveProviderConfig = {
-      apiKey: customApiKey || apiKey,
+      apiKey,
       voiceName,
       systemInstruction,
       functions,
@@ -136,10 +137,10 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     } else {
       return new OpenAIRealtimeAdapter(config, callbacks);
     }
-  }, [apiKey, voiceName, systemInstruction, functions, buildCallbacks]);
+  }, [voiceName, systemInstruction, functions, buildCallbacks]);
 
   // Connect to provider
-  const connect = useCallback((type?: ProviderType): Promise<void> => {
+  const connect = useCallback((apiKey: string, type?: ProviderType): Promise<void> => {
     return new Promise((resolve, reject) => {
       const targetProvider = type || provider;
       
@@ -155,14 +156,17 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
         return;
       }
 
+      // Store for later use
+      apiKeyRef.current = apiKey;
+      
       setStatus("connecting");
       setError(null);
       connectResolveRef.current = resolve;
 
-      providerRef.current = createProvider(targetProvider);
+      providerRef.current = createProvider(targetProvider, apiKey);
       providerRef.current.connect().catch(reject);
     });
-  }, [apiKey, provider, status, createProvider]);
+  }, [provider, status, createProvider]);
 
   // Disconnect
   const disconnect = useCallback(() => {
@@ -178,7 +182,7 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
   const switchProvider = useCallback(async (
     newProvider: ProviderType,
     history: Array<{ role: "user" | "assistant"; content: string }>,
-    newApiKey?: string
+    apiKey: string
   ): Promise<void> => {
     // Disconnect current provider
     audioRecorder.stopRecording();
@@ -186,9 +190,12 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     providerRef.current?.disconnect();
     providerRef.current = null;
     
+    // Store for later use
+    apiKeyRef.current = apiKey;
+    
     // Create new provider
     setStatus("connecting");
-    providerRef.current = createProvider(newProvider, newApiKey);
+    providerRef.current = createProvider(newProvider, apiKey);
     await providerRef.current.connect();
     
     // Send history to new provider
@@ -202,13 +209,14 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
 
   // Start a session
   const startSession = useCallback(async (
+    apiKey: string,
     history: Array<{ role: "user" | "assistant"; content: string }> = [],
     contextOrPrompt: string = "",
     isCustomPrompt: boolean = false
   ) => {
     try {
       if (status !== "connected") {
-        await connect();
+        await connect(apiKey);
       }
       await new Promise(resolve => setTimeout(resolve, 200));
       
