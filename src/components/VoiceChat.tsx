@@ -18,6 +18,17 @@ import {
 
 const SHOW_SIGNIN_AFTER_MESSAGES = 20;
 
+// Detect if browser has good audio support (Chrome, Safari, Edge, Opera, Brave)
+function hasGoodAudioSupport(): boolean {
+  if (typeof navigator === "undefined") return true; // SSR
+  const ua = navigator.userAgent;
+  // All Chromium-based browsers (Chrome, Edge, Opera, Brave, Arc) have "Chrome" in UA
+  const isChromiumBased = /Chrome/.test(ua);
+  // Safari has "Safari" but NOT "Chrome" (Chromium browsers also have Safari in UA)
+  const isSafari = /Safari/.test(ua) && !isChromiumBased;
+  return isChromiumBased || isSafari;
+}
+
 // Get user context (date, time, location)
 async function getUserContext(): Promise<string> {
   const now = new Date();
@@ -89,6 +100,13 @@ export function VoiceChat() {
   const [suggestionsAfterMessageIndex, setSuggestionsAfterMessageIndex] = useState<number>(-1);
   // Trigger to force save effect to run when messages are sealed (ref changes don't trigger effects)
   const [saveTrigger, setSaveTrigger] = useState(0);
+  // Browser audio support check
+  const [showBrowserWarning, setShowBrowserWarning] = useState(false);
+  
+  // Check browser compatibility on mount
+  useEffect(() => {
+    setShowBrowserWarning(!hasGoodAudioSupport());
+  }, []);
   
   // Track which message triggered the card and how many messages after it to keep it visible
   const cardSourceMessageIdRef = useRef<string | null>(null);
@@ -631,6 +649,13 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
         {liveProvider.status === "error" && (
           <p className="text-sm font-medium text-destructive mt-2">
             {liveProvider.error || "Connection error"}
+          </p>
+        )}
+        
+        {/* Browser compatibility warning */}
+        {showBrowserWarning && (
+          <p className="text-center text-xs text-amber-500/80 mt-3 px-4 max-w-xs">
+            ⚠️ For best audio quality, use Chrome or Safari. Other browsers may have issues.
           </p>
         )}
       </div>

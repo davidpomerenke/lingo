@@ -114,8 +114,8 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     onTurnComplete: () => {
       if (providerGenerationRef.current !== generation) return;
       setIsModelSpeaking(false);
-      // Don't start recording here - wait for audio to finish playing
-      // to avoid echo on Android. See useEffect below.
+      // Start recording immediately when model's turn is complete
+      audioRecorderRef.current.startRecording();
     },
     onFunctionCall: (call: FunctionCall) => {
       if (providerGenerationRef.current !== generation) return;
@@ -134,25 +134,6 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
       setIsModelSpeaking(false);
     },
   }), [audioPlayer]);
-
-  // Track if we should auto-resume recording after model stops
-  const shouldResumeRecordingRef = useRef(false);
-  
-  // Start recording when model is done speaking AND audio finished playing
-  // This prevents echo on Android Firefox
-  useEffect(() => {
-    if (status === "connected" && !isModelSpeaking && !audioPlayer.isPlaying && shouldResumeRecordingRef.current) {
-      shouldResumeRecordingRef.current = false;
-      audioRecorderRef.current.startRecording();
-    }
-  }, [status, isModelSpeaking, audioPlayer.isPlaying]);
-
-  // When model starts speaking, mark that we should resume recording after
-  useEffect(() => {
-    if (isModelSpeaking) {
-      shouldResumeRecordingRef.current = true;
-    }
-  }, [isModelSpeaking]);
 
   // Store current API key in ref so it persists across connect calls
   const apiKeyRef = useRef<string>("");
@@ -264,6 +245,7 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
       }
       await new Promise(resolve => setTimeout(resolve, 200));
       
+      // Send the initial prompt to get the AI to speak
       if (isCustomPrompt) {
         if (history.length > 0) {
           providerRef.current?.sendHistoryAndPrompt(history, contextOrPrompt);
@@ -278,6 +260,8 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
           providerRef.current?.sendPrompt(`${contextPrefix}<START>`);
         }
       }
+      
+      // Recording will start automatically when model's turn completes (onTurnComplete)
     } catch (err) {
       console.error("Failed to start session:", err);
     }
