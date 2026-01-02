@@ -18,6 +18,20 @@ export function useAudioPlayer(sampleRate: number = 24000) {
     return audioContextRef.current;
   }, [sampleRate]);
 
+  // Unlock AudioContext for iOS Safari - must be called from user gesture
+  const unlock = useCallback(async () => {
+    const ctx = getAudioContext();
+    if (ctx.state === "suspended") {
+      await ctx.resume();
+    }
+    // Play a tiny silent buffer to fully unlock on iOS
+    const buffer = ctx.createBuffer(1, 1, sampleRate);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.start(0);
+  }, [getAudioContext, sampleRate]);
+
   const playNextInQueue = useCallback(async () => {
     if (isProcessingRef.current || audioQueueRef.current.length === 0) {
       if (audioQueueRef.current.length === 0) {
@@ -98,5 +112,6 @@ export function useAudioPlayer(sampleRate: number = 24000) {
     queueAudio,
     stop,
     cleanup,
+    unlock,
   };
 }

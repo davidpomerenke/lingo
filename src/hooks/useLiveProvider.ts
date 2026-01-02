@@ -105,7 +105,8 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     },
     onTurnComplete: () => {
       setIsModelSpeaking(false);
-      audioRecorderRef.current.startRecording();
+      // Don't start recording here - wait for audio to finish playing
+      // to avoid echo on Android. See useEffect below.
     },
     onFunctionCall: (call: FunctionCall) => {
       onFunctionCallRef.current?.(call);
@@ -119,6 +120,25 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
       setIsModelSpeaking(false);
     },
   }), [audioPlayer]);
+
+  // Track if we should auto-resume recording after model stops
+  const shouldResumeRecordingRef = useRef(false);
+  
+  // Start recording when model is done speaking AND audio finished playing
+  // This prevents echo on Android Firefox
+  useEffect(() => {
+    if (status === "connected" && !isModelSpeaking && !audioPlayer.isPlaying && shouldResumeRecordingRef.current) {
+      shouldResumeRecordingRef.current = false;
+      audioRecorderRef.current.startRecording();
+    }
+  }, [status, isModelSpeaking, audioPlayer.isPlaying]);
+
+  // When model starts speaking, mark that we should resume recording after
+  useEffect(() => {
+    if (isModelSpeaking) {
+      shouldResumeRecordingRef.current = true;
+    }
+  }, [isModelSpeaking]);
 
   // Store current API key in ref so it persists across connect calls
   const apiKeyRef = useRef<string>("");
@@ -144,6 +164,9 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
 
   // Connect to provider
   const connect = useCallback((apiKey: string, type?: ProviderType): Promise<void> => {
+    // Unlock audio playback for iOS Safari - must be called from user gesture
+    audioPlayer.unlock();
+    
     return new Promise((resolve, reject) => {
       const targetProvider = type || provider;
       
@@ -169,7 +192,7 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
       providerRef.current = createProvider(targetProvider, apiKey);
       providerRef.current.connect().catch(reject);
     });
-  }, [provider, status, createProvider]);
+  }, [provider, status, createProvider, audioPlayer]);
 
   // Disconnect
   const disconnect = useCallback(() => {
