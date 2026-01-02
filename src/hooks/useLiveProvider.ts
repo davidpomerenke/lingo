@@ -95,6 +95,8 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
       if (providerGenerationRef.current !== generation) return;
       setStatus("connected");
       setCurrentProvider(type);
+      // Start recording immediately when connected
+      audioRecorderRef.current.startRecording();
       connectResolveRef.current?.();
       connectResolveRef.current = null;
     },
@@ -114,8 +116,7 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     onTurnComplete: () => {
       if (providerGenerationRef.current !== generation) return;
       setIsModelSpeaking(false);
-      // Start recording immediately when model's turn is complete
-      audioRecorderRef.current.startRecording();
+      // Recording is always on - no need to restart
     },
     onFunctionCall: (call: FunctionCall) => {
       if (providerGenerationRef.current !== generation) return;
