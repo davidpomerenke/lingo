@@ -188,3 +188,12 @@
 .waveform-bar:nth-child(7) { animation-delay: 0.2s; }
 .waveform-bar:nth-child(8) { animation-delay: 0.1s; }
 .waveform-bar:nth-child(9) { animation-delay: 0s; }
+
+/* Custom scrollbar */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar { width: 6px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }

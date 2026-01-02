@@ -389,10 +389,7 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, 
     <div className="w-full max-w-md mx-auto relative" ref={containerRef}>
       <div
         ref={scrollRef}
-        className={cn(
-          "h-72 overflow-y-auto px-4 py-3",
-          "scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent"
-        )}
+        className="h-72 overflow-y-auto px-4 py-3 custom-scrollbar"
         onMouseUp={handleMouseUp}
         onMouseDown={handleMouseDown}
         onClick={handleClick}
