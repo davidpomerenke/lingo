@@ -7,8 +7,31 @@ interface UseAudioRecorderOptions {
   onAudioData?: (blob: Blob) => void;
 }
 
+// Resample audio from source rate to target rate using linear interpolation
+function resampleAudio(inputData: Float32Array, inputRate: number, outputRate: number): Float32Array {
+  if (inputRate === outputRate) {
+    return inputData;
+  }
+  
+  const ratio = inputRate / outputRate;
+  const outputLength = Math.round(inputData.length / ratio);
+  const output = new Float32Array(outputLength);
+  
+  for (let i = 0; i < outputLength; i++) {
+    const srcIndex = i * ratio;
+    const srcIndexFloor = Math.floor(srcIndex);
+    const srcIndexCeil = Math.min(srcIndexFloor + 1, inputData.length - 1);
+    const t = srcIndex - srcIndexFloor;
+    
+    // Linear interpolation
+    output[i] = inputData[srcIndexFloor] * (1 - t) + inputData[srcIndexCeil] * t;
+  }
+  
+  return output;
+}
+
 export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
-  const { sampleRate = 16000, onAudioData } = options;
+  const { sampleRate: targetSampleRate = 16000, onAudioData } = options;
   
   const [isRecording, setIsRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,9 +48,9 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
     try {
       setError(null);
       
+      // Request audio - don't force sample rate as Android often ignores it
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          sampleRate,
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
@@ -36,29 +59,37 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       
       streamRef.current = stream;
       
-      const audioContext = new AudioContext({ sampleRate });
+      // Create AudioContext without forcing sample rate - let browser decide
+      const audioContext = new AudioContext();
       audioContextRef.current = audioContext;
+      
+      // Get the actual sample rate the browser is using
+      const actualSampleRate = audioContext.sampleRate;
+      console.log(`Audio recording: device=${actualSampleRate}Hz, target=${targetSampleRate}Hz`);
       
       const source = audioContext.createMediaStreamSource(stream);
       sourceRef.current = source;
       
-      // Use ScriptProcessorNode for audio capture
+      // Use ScriptProcessorNode for audio capture (deprecated but widely supported)
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
       
       processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
         
+        // Resample if necessary (e.g., Android often uses 48kHz)
+        const resampledData = resampleAudio(inputData, actualSampleRate, targetSampleRate);
+        
         // Convert Float32 to Int16 PCM
-        const int16Array = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
+        const int16Array = new Int16Array(resampledData.length);
+        for (let i = 0; i < resampledData.length; i++) {
+          const s = Math.max(-1, Math.min(1, resampledData[i]));
           int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
         
-        // Create blob with PCM data
+        // Create blob with PCM data at target sample rate
         const blob = new Blob([int16Array.buffer], { 
-          type: `audio/pcm;rate=${sampleRate}` 
+          type: `audio/pcm;rate=${targetSampleRate}` 
         });
         onAudioData?.(blob);
       };
@@ -72,7 +103,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       setError(message);
       console.error("Recording error:", err);
     }
-  }, [sampleRate, onAudioData, isRecording]);
+  }, [targetSampleRate, onAudioData, isRecording]);
 
   const stopRecording = useCallback(() => {
     if (streamRef.current) {

@@ -232,7 +232,8 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, 
     }
   }, [currentLanguage]);
 
-  const handleMouseUp = useCallback(() => {
+  // Shared logic for handling text selection (works for both mouse and touch)
+  const handleSelection = useCallback(() => {
     const selection = window.getSelection();
     const selectedText = selection?.toString().trim();
 
@@ -249,8 +250,12 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, 
 
     if (!containerRect) return;
 
+    // Check if selection is within our container
+    const startNode = range.startContainer;
+    if (!containerRef.current?.contains(startNode)) return;
+
     // Find the source message from the selection
-    const sourceMessage = findMessageFromElement(range.startContainer);
+    const sourceMessage = findMessageFromElement(startNode);
 
     // Position tooltip above the selection
     const x = rect.left + rect.width / 2 - containerRect.left;
@@ -258,6 +263,41 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, 
 
     fetchTranslation(selectedText, x, y, sourceMessage);
   }, [fetchTranslation, findMessageFromElement]);
+
+  const handleMouseUp = useCallback(() => {
+    handleSelection();
+  }, [handleSelection]);
+
+  // Handle mobile text selection via selectionchange event
+  // Mobile browsers finalize selection after touch interaction
+  const selectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      // Debounce selection changes - wait for user to finish selecting
+      if (selectionTimeoutRef.current) {
+        clearTimeout(selectionTimeoutRef.current);
+      }
+      
+      selectionTimeoutRef.current = setTimeout(() => {
+        const selection = window.getSelection();
+        const selectedText = selection?.toString().trim();
+        
+        // Only process if we have a substantial selection (not just a tap)
+        if (selectedText && selectedText.length >= 2) {
+          handleSelection();
+        }
+      }, 300); // Wait 300ms for selection to stabilize
+    };
+
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+      if (selectionTimeoutRef.current) {
+        clearTimeout(selectionTimeoutRef.current);
+      }
+    };
+  }, [handleSelection]);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     // Only trigger if there's no text selection (simple click, not drag-select)
