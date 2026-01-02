@@ -3,125 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
-
-// Common languages with metadata (for suggestions and flags)
-const LANGUAGE_DATA: Record<string, { nativeName: string; flag: string }> = {
-  // Major world languages
-  "English": { nativeName: "English", flag: "🇬🇧" },
-  "Spanish": { nativeName: "Español", flag: "🇪🇸" },
-  "French": { nativeName: "Français", flag: "🇫🇷" },
-  "German": { nativeName: "Deutsch", flag: "🇩🇪" },
-  "Italian": { nativeName: "Italiano", flag: "🇮🇹" },
-  "Portuguese": { nativeName: "Português", flag: "🇵🇹" },
-  "Russian": { nativeName: "Русский", flag: "🇷🇺" },
-  "Chinese": { nativeName: "中文", flag: "🇨🇳" },
-  "Japanese": { nativeName: "日本語", flag: "🇯🇵" },
-  "Korean": { nativeName: "한국어", flag: "🇰🇷" },
-  "Arabic": { nativeName: "العربية", flag: "🇸🇦" },
-  "Hindi": { nativeName: "हिन्दी", flag: "🇮🇳" },
-  
-  // European languages
-  "Dutch": { nativeName: "Nederlands", flag: "🇳🇱" },
-  "Greek": { nativeName: "Ελληνικά", flag: "🇬🇷" },
-  "Polish": { nativeName: "Polski", flag: "🇵🇱" },
-  "Swedish": { nativeName: "Svenska", flag: "🇸🇪" },
-  "Norwegian": { nativeName: "Norsk", flag: "🇳🇴" },
-  "Danish": { nativeName: "Dansk", flag: "🇩🇰" },
-  "Finnish": { nativeName: "Suomi", flag: "🇫🇮" },
-  "Czech": { nativeName: "Čeština", flag: "🇨🇿" },
-  "Hungarian": { nativeName: "Magyar", flag: "🇭🇺" },
-  "Romanian": { nativeName: "Română", flag: "🇷🇴" },
-  "Ukrainian": { nativeName: "Українська", flag: "🇺🇦" },
-  "Turkish": { nativeName: "Türkçe", flag: "🇹🇷" },
-  "Bulgarian": { nativeName: "Български", flag: "🇧🇬" },
-  "Croatian": { nativeName: "Hrvatski", flag: "🇭🇷" },
-  "Serbian": { nativeName: "Српски", flag: "🇷🇸" },
-  "Slovak": { nativeName: "Slovenčina", flag: "🇸🇰" },
-  "Slovenian": { nativeName: "Slovenščina", flag: "🇸🇮" },
-  "Lithuanian": { nativeName: "Lietuvių", flag: "🇱🇹" },
-  "Latvian": { nativeName: "Latviešu", flag: "🇱🇻" },
-  "Estonian": { nativeName: "Eesti", flag: "🇪🇪" },
-  "Icelandic": { nativeName: "Íslenska", flag: "🇮🇸" },
-  "Irish": { nativeName: "Gaeilge", flag: "🇮🇪" },
-  "Welsh": { nativeName: "Cymraeg", flag: "🏴󠁧󠁢󠁷󠁬󠁳󠁿" },
-  "Scottish Gaelic": { nativeName: "Gàidhlig", flag: "🏴󠁧󠁢󠁳󠁣󠁴󠁿" },
-  "Catalan": { nativeName: "Català", flag: "🇪🇸" },
-  "Basque": { nativeName: "Euskara", flag: "🇪🇸" },
-  "Galician": { nativeName: "Galego", flag: "🇪🇸" },
-  "Albanian": { nativeName: "Shqip", flag: "🇦🇱" },
-  "Macedonian": { nativeName: "Македонски", flag: "🇲🇰" },
-  "Bosnian": { nativeName: "Bosanski", flag: "🇧🇦" },
-  "Maltese": { nativeName: "Malti", flag: "🇲🇹" },
-  "Luxembourgish": { nativeName: "Lëtzebuergesch", flag: "🇱🇺" },
-  "Belarusian": { nativeName: "Беларуская", flag: "🇧🇾" },
-  
-  // Asian languages
-  "Vietnamese": { nativeName: "Tiếng Việt", flag: "🇻🇳" },
-  "Thai": { nativeName: "ไทย", flag: "🇹🇭" },
-  "Indonesian": { nativeName: "Bahasa Indonesia", flag: "🇮🇩" },
-  "Malay": { nativeName: "Bahasa Melayu", flag: "🇲🇾" },
-  "Filipino": { nativeName: "Filipino", flag: "🇵🇭" },
-  "Tagalog": { nativeName: "Tagalog", flag: "🇵🇭" },
-  "Bengali": { nativeName: "বাংলা", flag: "🇧🇩" },
-  "Tamil": { nativeName: "தமிழ்", flag: "🇮🇳" },
-  "Telugu": { nativeName: "తెలుగు", flag: "🇮🇳" },
-  "Marathi": { nativeName: "मराठी", flag: "🇮🇳" },
-  "Gujarati": { nativeName: "ગુજરાતી", flag: "🇮🇳" },
-  "Kannada": { nativeName: "ಕನ್ನಡ", flag: "🇮🇳" },
-  "Malayalam": { nativeName: "മലയാളം", flag: "🇮🇳" },
-  "Punjabi": { nativeName: "ਪੰਜਾਬੀ", flag: "🇮🇳" },
-  "Urdu": { nativeName: "اردو", flag: "🇵🇰" },
-  "Nepali": { nativeName: "नेपाली", flag: "🇳🇵" },
-  "Sinhala": { nativeName: "සිංහල", flag: "🇱🇰" },
-  "Burmese": { nativeName: "မြန်မာဘာသာ", flag: "🇲🇲" },
-  "Khmer": { nativeName: "ខ្មែរ", flag: "🇰🇭" },
-  "Lao": { nativeName: "ລາວ", flag: "🇱🇦" },
-  "Mongolian": { nativeName: "Монгол", flag: "🇲🇳" },
-  "Kazakh": { nativeName: "Қазақ", flag: "🇰🇿" },
-  "Uzbek": { nativeName: "Oʻzbek", flag: "🇺🇿" },
-  "Georgian": { nativeName: "ქართული", flag: "🇬🇪" },
-  "Armenian": { nativeName: "Հայdelays", flag: "🇦🇲" },
-  "Azerbaijani": { nativeName: "Azərbaycan", flag: "🇦🇿" },
-  
-  // Middle Eastern languages
-  "Hebrew": { nativeName: "עברית", flag: "🇮🇱" },
-  "Persian": { nativeName: "فارسی", flag: "🇮🇷" },
-  "Kurdish": { nativeName: "Kurdî", flag: "🇮🇶" },
-  "Pashto": { nativeName: "پښتو", flag: "🇦🇫" },
-  "Dari": { nativeName: "دری", flag: "🇦🇫" },
-  
-  // African languages
-  "Swahili": { nativeName: "Kiswahili", flag: "🇰🇪" },
-  "Amharic": { nativeName: "አማርኛ", flag: "🇪🇹" },
-  "Hausa": { nativeName: "Hausa", flag: "🇳🇬" },
-  "Yoruba": { nativeName: "Yorùbá", flag: "🇳🇬" },
-  "Igbo": { nativeName: "Igbo", flag: "🇳🇬" },
-  "Zulu": { nativeName: "isiZulu", flag: "🇿🇦" },
-  "Xhosa": { nativeName: "isiXhosa", flag: "🇿🇦" },
-  "Afrikaans": { nativeName: "Afrikaans", flag: "🇿🇦" },
-  "Somali": { nativeName: "Soomaali", flag: "🇸🇴" },
-  "Tigrinya": { nativeName: "ትግርኛ", flag: "🇪🇷" },
-  "Oromo": { nativeName: "Afaan Oromoo", flag: "🇪🇹" },
-  "Malagasy": { nativeName: "Malagasy", flag: "🇲🇬" },
-  
-  // Classical & constructed languages
-  "Latin": { nativeName: "Latina", flag: "🏛️" },
-  "Ancient Greek": { nativeName: "Ἑλληνική", flag: "🏛️" },
-  "Sanskrit": { nativeName: "संस्कृतम्", flag: "🕉️" },
-  "Classical Chinese": { nativeName: "文言文", flag: "📜" },
-  "Esperanto": { nativeName: "Esperanto", flag: "🌍" },
-};
-
-const ALL_SUGGESTIONS = Object.keys(LANGUAGE_DATA);
-
-function getLanguageInfo(name: string) {
-  const data = LANGUAGE_DATA[name];
-  return {
-    name,
-    nativeName: data?.nativeName || name,
-    flag: data?.flag || "🌐",
-  };
-}
+import { ALL_LANGUAGES, getLanguageInfo } from "@/lib/languages";
 
 interface LanguageSelectorProps {
   selectedLanguage: string;
@@ -156,7 +38,7 @@ export function LanguageSelector({ selectedLanguage, onSelectLanguage }: Languag
       return;
     }
     const query = newLanguage.toLowerCase();
-    const matches = ALL_SUGGESTIONS.filter(
+    const matches = ALL_LANGUAGES.filter(
       (lang) =>
         lang.toLowerCase().includes(query) &&
         !languages.includes(lang)
@@ -351,8 +233,4 @@ export function LanguageSelector({ selectedLanguage, onSelectLanguage }: Languag
       )}
     </div>
   );
-}
-
-export function getLanguageByName(name: string) {
-  return getLanguageInfo(name);
 }

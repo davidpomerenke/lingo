@@ -54,6 +54,8 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
   
   const providerRef = useRef<LiveProvider | null>(null);
   const connectResolveRef = useRef<(() => void) | null>(null);
+  // Generation counter to prevent stale callbacks from old providers affecting state
+  const providerGenerationRef = useRef(0);
   
   // Audio player uses 24kHz for both providers (both output 24kHz)
   const audioPlayer = useAudioPlayer(24000);
@@ -86,36 +88,48 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
   }, [onUserTranscript, onModelTranscript, onFunctionCall]);
 
   // Build callbacks for provider - extracted to avoid duplication
-  const buildCallbacks = useCallback((type: ProviderType) => ({
+  // Each callback captures the generation at creation time to prevent stale updates
+  const buildCallbacks = useCallback((type: ProviderType, generation: number) => ({
     onOpen: () => {
+      // Only update state if this is still the current provider
+      if (providerGenerationRef.current !== generation) return;
       setStatus("connected");
       setCurrentProvider(type);
       connectResolveRef.current?.();
       connectResolveRef.current = null;
     },
     onAudio: (audioBlob: Blob) => {
+      if (providerGenerationRef.current !== generation) return;
       setIsModelSpeaking(true);
       audioPlayer.queueAudio(audioBlob);
     },
     onUserTranscript: (text: string) => {
+      if (providerGenerationRef.current !== generation) return;
       onUserTranscriptRef.current?.(text);
     },
     onModelTranscript: (text: string) => {
+      if (providerGenerationRef.current !== generation) return;
       onModelTranscriptRef.current?.(text);
     },
     onTurnComplete: () => {
+      if (providerGenerationRef.current !== generation) return;
       setIsModelSpeaking(false);
       // Don't start recording here - wait for audio to finish playing
       // to avoid echo on Android. See useEffect below.
     },
     onFunctionCall: (call: FunctionCall) => {
+      if (providerGenerationRef.current !== generation) return;
       onFunctionCallRef.current?.(call);
     },
     onError: (err: Error) => {
+      if (providerGenerationRef.current !== generation) return;
       setError(err.message);
       setStatus("error");
     },
     onClose: () => {
+      // Only update state if this is still the current provider
+      // This prevents old provider's close event from affecting new connection
+      if (providerGenerationRef.current !== generation) return;
       setStatus("disconnected");
       setIsModelSpeaking(false);
     },
@@ -145,6 +159,10 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
 
   // Create provider instance
   const createProvider = useCallback((type: ProviderType, apiKey: string): LiveProvider => {
+    // Increment generation to invalidate callbacks from previous providers
+    providerGenerationRef.current += 1;
+    const generation = providerGenerationRef.current;
+    
     const config: LiveProviderConfig = {
       apiKey,
       voiceName,
@@ -153,7 +171,7 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
       inputLanguage,
     };
 
-    const callbacks = buildCallbacks(type);
+    const callbacks = buildCallbacks(type, generation);
 
     if (type === "gemini") {
       return new GeminiLiveAdapter(config, callbacks);
