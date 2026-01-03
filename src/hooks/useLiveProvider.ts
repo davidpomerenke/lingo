@@ -107,6 +107,8 @@ export function useLiveProvider(options: UseLiveProviderOptions) {
     },
     onTurnComplete: () => {
       setIsModelSpeaking(false);
+      // Restart recording after model finishes speaking
+      audioRecorderRef.current.startRecording();
     },
     onFunctionCall: (call: FunctionCall) => {
       onFunctionCallRef.current?.(call);

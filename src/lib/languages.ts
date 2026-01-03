@@ -156,3 +156,20 @@ export const NON_LATIN_LANGUAGES = new Set(
   Object.entries(LANGUAGES).filter(([, v]) => v.nonLatin).map(([k]) => k)
 );
 
+/**
+ * Check if a character belongs to a non-space-delimited script (CJK, Thai)
+ * These scripts don't use spaces between words, so clicking should select
+ * individual characters rather than finding word boundaries.
+ */
+export function isNonSpaceDelimitedChar(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x4E00 && code <= 0x9FFF) ||   // CJK Unified Ideographs
+    (code >= 0x3400 && code <= 0x4DBF) ||   // CJK Extension A
+    (code >= 0x3040 && code <= 0x309F) ||   // Hiragana
+    (code >= 0x30A0 && code <= 0x30FF) ||   // Katakana
+    (code >= 0xAC00 && code <= 0xD7AF) ||   // Korean Hangul
+    (code >= 0x0E00 && code <= 0x0E7F)      // Thai
+  );
+}
+

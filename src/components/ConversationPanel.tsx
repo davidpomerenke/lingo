@@ -1,22 +1,11 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { isRtlLanguage, isNonSpaceDelimitedChar } from "@/lib/languages";
+import type { Message } from "@/types/message";
 import React, { useEffect, useRef, useState, useCallback } from "react";
 
-// RTL languages
-const RTL_LANGUAGES = new Set([
-  "Arabic", "Hebrew", "Persian", "Urdu", "Pashto", "Dari", "Kurdish"
-]);
-
 const ONBOARDING_KEY = "lingo-translate-tip-seen";
-
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  language?: string;
-  useLatinLetters?: boolean;
-}
 
 interface ConversationPanelProps {
   messages: Message[];
@@ -45,32 +34,14 @@ interface TooltipData {
   loading: boolean;
 }
 
-// Helper to check if a character is CJK or other non-space script
-function isCJKChar(char: string): boolean {
-  const code = char.charCodeAt(0);
-  return (
-    (code >= 0x4E00 && code <= 0x9FFF) ||   // CJK Unified Ideographs
-    (code >= 0x3400 && code <= 0x4DBF) ||   // CJK Extension A
-    (code >= 0x3040 && code <= 0x309F) ||   // Hiragana
-    (code >= 0x30A0 && code <= 0x30FF) ||   // Katakana
-    (code >= 0xAC00 && code <= 0xD7AF) ||   // Korean Hangul
-    (code >= 0x0E00 && code <= 0x0E7F) ||   // Thai
-    (code >= 0x0600 && code <= 0x06FF) ||   // Arabic
-    (code >= 0x0590 && code <= 0x05FF) ||   // Hebrew
-    (code >= 0x0900 && code <= 0x097F) ||   // Devanagari (Hindi)
-    (code >= 0x0400 && code <= 0x04FF) ||   // Cyrillic
-    (code >= 0x0370 && code <= 0x03FF)      // Greek
-  );
-}
-
-// Find word boundaries - works for both Latin and CJK scripts
+// Find word boundaries - works for both Latin and non-space-delimited scripts (CJK, Thai)
 function findWordBoundaries(text: string, offset: number): { start: number; end: number } | null {
   if (offset < 0 || offset >= text.length) return null;
   
   const char = text[offset];
   
-  // For CJK characters, select just that character (or small cluster)
-  if (isCJKChar(char)) {
+  // For non-space-delimited scripts (CJK, Thai), select just that character (or small cluster)
+  if (isNonSpaceDelimitedChar(char)) {
     let start = offset;
     let end = offset + 1;
     
@@ -82,15 +53,16 @@ function findWordBoundaries(text: string, offset: number): { start: number; end:
     return { start, end };
   }
   
-  // For Latin/space-based scripts, find word boundaries
-  if (/\w/.test(char)) {
+  // For Latin/space-based scripts (including Greek, Cyrillic, Arabic, etc.), find word boundaries
+  // Use Unicode word character matching for non-ASCII scripts
+  if (/[\p{L}\p{N}]/u.test(char)) {
     let start = offset;
     let end = offset;
     
-    while (start > 0 && /\w/.test(text[start - 1])) {
+    while (start > 0 && /[\p{L}\p{N}]/u.test(text[start - 1])) {
       start--;
     }
-    while (end < text.length && /\w/.test(text[end])) {
+    while (end < text.length && /[\p{L}\p{N}]/u.test(text[end])) {
       end++;
     }
     
@@ -105,7 +77,7 @@ function isMessageRTL(message: Message): boolean {
   if (!message.language) return false;
   // Only RTL when using native script (not Latin letters)
   if (message.useLatinLetters) return false;
-  return RTL_LANGUAGES.has(message.language);
+  return isRtlLanguage(message.language);
 }
 
 export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, suggestions = [], suggestionsAfterMessageIndex = -1 }: ConversationPanelProps) {

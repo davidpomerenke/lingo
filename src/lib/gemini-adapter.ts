@@ -7,6 +7,7 @@
 
 import { GoogleGenAI, LiveServerMessage, Modality, Session, Blob as GeminiBlob, FunctionDeclaration, Type } from "@google/genai";
 import type { LiveProvider, LiveProviderConfig, LiveProviderCallbacks, FunctionDefinition, FunctionResult } from "./live-provider";
+import { blobToBase64, base64ToPcmBlob } from "./audio-utils";
 
 // Map our function definitions to Gemini's format
 function toGeminiFunctionDeclarations(functions?: FunctionDefinition[]): FunctionDeclaration[] | undefined {
@@ -116,14 +117,7 @@ export class GeminiLiveAdapter implements LiveProvider {
     if (message.serverContent?.modelTurn?.parts) {
       for (const part of message.serverContent.modelTurn.parts) {
         if (part.inlineData && part.inlineData.data) {
-          const binaryString = atob(part.inlineData.data);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          const blob = new Blob([bytes], { 
-            type: part.inlineData.mimeType || "audio/pcm;rate=24000" 
-          });
+          const blob = base64ToPcmBlob(part.inlineData.data, 24000);
           this.callbacks.onAudio?.(blob);
         }
         
@@ -195,13 +189,7 @@ export class GeminiLiveAdapter implements LiveProvider {
     if (!this.session) return;
     
     try {
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      let binary = "";
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      const base64Data = btoa(binary);
+      const base64Data = await blobToBase64(audioBlob);
       
       const audioData: GeminiBlob = {
         mimeType: "audio/pcm;rate=16000",
@@ -248,20 +236,6 @@ export class GeminiLiveAdapter implements LiveProvider {
   }
 }
 
-// Audio utilities
-export function pcmBlobToFloat32Array(blob: Blob): Promise<Float32Array> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const arrayBuffer = reader.result as ArrayBuffer;
-      const int16Array = new Int16Array(arrayBuffer);
-      const float32Array = new Float32Array(int16Array.length);
-      for (let i = 0; i < int16Array.length; i++) {
-        float32Array[i] = int16Array[i] / 32768.0;
-      }
-      resolve(float32Array);
-    };
-    reader.readAsArrayBuffer(blob);
-  });
-}
+// Re-export for backwards compatibility
+export { pcmBlobToFloat32Array } from "./audio-utils";
 

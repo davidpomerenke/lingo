@@ -2,127 +2,84 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useLiveProvider } from "@/hooks/useLiveProvider";
+import { useMessages } from "@/hooks/useMessages";
 import type { ProviderType } from "@/lib/live-provider";
+import type { Message } from "@/types/message";
 import { VoiceOrb } from "./VoiceOrb";
 import { ConversationPanel } from "./ConversationPanel";
 import { LanguageSelector } from "./LanguageSelector";
 import { ProviderSelector } from "./ProviderSelector";
 import { GamePills } from "./GamePills";
+import { Toggle } from "./ui/toggle";
+import { TrashIcon } from "./ui/icons";
+import { LoadingSpinner } from "./ui/loading";
 import { useAuth } from "@/lib/auth-context";
+import { hasGoodAudioSupport, getUserContext } from "@/lib/utils";
+import { buildSystemInstruction } from "@/lib/prompts";
 import { 
   isNonLatinLanguage, 
   isSupportedLanguage, 
   getLanguageCode,
-  NON_LATIN_LANGUAGES,
 } from "@/lib/languages";
 
-const SHOW_SIGNIN_AFTER_MESSAGES = 20;
-
-// Detect if browser has good audio support (Chrome, Safari, Edge, Opera, Brave)
-function hasGoodAudioSupport(): boolean {
-  if (typeof navigator === "undefined") return true; // SSR
-  const ua = navigator.userAgent;
-  // All Chromium-based browsers (Chrome, Edge, Opera, Brave, Arc) have "Chrome" in UA
-  const isChromiumBased = /Chrome/.test(ua);
-  // Safari has "Safari" but NOT "Chrome" (Chromium browsers also have Safari in UA)
-  const isSafari = /Safari/.test(ua) && !isChromiumBased;
-  return isChromiumBased || isSafari;
-}
-
-// Get user context (date, time, location)
-async function getUserContext(): Promise<string> {
-  const now = new Date();
-  const dateStr = now.toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-  const timeStr = now.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-  let locationStr = "unknown";
-  try {
-    const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
-        timeout: 5000,
-        maximumAge: 300000, // Cache for 5 minutes
-      });
-    });
-    const { latitude, longitude } = position.coords;
-    // Try to get city name via reverse geocoding
-    try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&zoom=10`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        const city = data.address?.city || data.address?.town || data.address?.village || "";
-        const country = data.address?.country || "";
-        locationStr = [city, country].filter(Boolean).join(", ") || `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
-      }
-    } catch {
-      locationStr = `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
-    }
-  } catch {
-    // Geolocation denied or unavailable
-    locationStr = "not available";
-  }
-
-  return `<CONTEXT date="${dateStr}" time="${timeStr}" timezone="${timezone}" location="${locationStr}" />`;
-}
-
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  language?: string;
-  useLatinLetters?: boolean;
-  provider?: "gemini" | "openai";
-}
-
 export function VoiceChat() {
-  const { user, isAnonymous, effectiveUserId, getEphemeralToken, login, languages, scriptModes, setScriptMode } = useAuth();
+  const { isAnonymous, getEphemeralToken, login, languages, scriptModes, setScriptMode } = useAuth();
   
   const [selectedLanguage, setSelectedLanguage] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<ProviderType>("gemini");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [readAloudText, setReadAloudText] = useState<string | null>(null);
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
   const [signInEmail, setSignInEmail] = useState("");
   const [signInStatus, setSignInStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionsAfterMessageIndex, setSuggestionsAfterMessageIndex] = useState<number>(-1);
-  // Trigger to force save effect to run when messages are sealed (ref changes don't trigger effects)
-  const [saveTrigger, setSaveTrigger] = useState(0);
-  // Browser audio support check
   const [showBrowserWarning, setShowBrowserWarning] = useState(false);
+  
+  // Use the messages hook for persistence
+  const { 
+    messages,
+    messagesRef, 
+    isLoading, 
+    sealAll, 
+    sealLastOfRole, 
+    addTranscript, 
+    clearHistory,
+    lastMessageMeta,
+  } = useMessages({
+    onSignInPrompt: () => setShowSignInPrompt(true),
+  });
   
   // Check browser compatibility on mount
   useEffect(() => {
     setShowBrowserWarning(!hasGoodAudioSupport());
   }, []);
   
-  // Track which message triggered the card and how many messages after it to keep it visible
+  // Track which message triggered the card
   const cardSourceMessageIdRef = useRef<string | null>(null);
-  const lastSavedRef = useRef<Map<string, string>>(new Map());
-  // Track "sealed" message IDs - messages we should never append to
-  const sealedMessageIdsRef = useRef<Set<string>>(new Set());
   // Track suggestion generation to only do once per AI turn
   const suggestionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastAiMessageIdForSuggestionsRef = useRef<string | null>(null);
 
-  // Set initial language from user's languages
+  // Track if we've done initial setup from loaded messages
+  const hasInitializedFromMessagesRef = useRef(false);
+  
+  // Set initial language and provider from loaded messages (only once)
   useEffect(() => {
-    if (!selectedLanguage && languages.length > 0) {
-      setSelectedLanguage(languages[0]);
+    // Only set from loaded messages once, and only after loading is complete
+    if (!isLoading && !hasInitializedFromMessagesRef.current) {
+      hasInitializedFromMessagesRef.current = true;
+      
+      // Prioritize language from last message, then fall back to user's first language
+      const langToSet = lastMessageMeta?.language || (languages.length > 0 ? languages[0] : null);
+      if (langToSet && !selectedLanguage) {
+        setSelectedLanguage(langToSet);
+      }
+      
+      if (lastMessageMeta?.provider) {
+        setSelectedProvider(lastMessageMeta.provider);
+      }
     }
-  }, [languages, selectedLanguage]);
+  }, [isLoading, lastMessageMeta, selectedLanguage, languages]);
 
   const lang = selectedLanguage || "Spanish";
   const langIsNonLatin = isNonLatinLanguage(lang);
@@ -130,193 +87,21 @@ export function VoiceChat() {
   const useLatinLetters = langIsNonLatin ? (scriptModes[lang] ?? true) : false;
   // Check if language is well-supported
   const langIsSupported = isSupportedLanguage(lang);
-  
-  // Helper: seal all current messages and trigger save
-  const sealAllMessages = useCallback(() => {
-    messages.forEach(m => sealedMessageIdsRef.current.add(m.id));
-    setSaveTrigger(t => t + 1);
-  }, [messages]);
 
-  // Helper to make API calls with auth headers
-  const authFetch = useCallback((url: string, options: RequestInit = {}) => {
-    const headers: Record<string, string> = {
-      ...(options.headers as Record<string, string>),
-    };
-    
-    // Add appropriate auth header
-    if (user) {
-      // Get session from localStorage for authenticated users
-      const sessionId = localStorage.getItem("lingo_session");
-      if (sessionId) headers["x-session-id"] = sessionId;
-    } else if (effectiveUserId) {
-      // Use anonymous ID
-      headers["x-anon-id"] = effectiveUserId;
-    }
-    
-    return fetch(url, { ...options, headers });
-  }, [user, effectiveUserId]);
-
-  // Load messages from database on mount
-  useEffect(() => {
-    if (!effectiveUserId) return;
-    
-    async function loadMessages() {
-      try {
-        const res = await authFetch("/api/messages");
-        if (res.ok) {
-          const data = await res.json();
-          const loadedMessages: Message[] = data.messages || [];
-          setMessages(loadedMessages);
-          // Track what's already saved AND seal these messages
-          loadedMessages.forEach((msg: Message) => {
-            lastSavedRef.current.set(msg.id, msg.content);
-            sealedMessageIdsRef.current.add(msg.id);
-          });
-          
-          // Set language and provider from the last message if available
-          if (loadedMessages.length > 0) {
-            const lastMessage = loadedMessages[loadedMessages.length - 1];
-            if (lastMessage.language) {
-              setSelectedLanguage(lastMessage.language);
-            }
-            if (lastMessage.provider) {
-              setSelectedProvider(lastMessage.provider);
-            }
-          }
-          
-          // Show sign-in suggestion after threshold (but don't block)
-          if (data.isAnonymous && data.messageCount >= SHOW_SIGNIN_AFTER_MESSAGES) {
-            setShowSignInPrompt(true);
-          }
-        }
-      } catch (err) {
-        console.error("Failed to load messages:", err);
-      } finally {
-        setIsLoading(false);
-      }
-    }
-    loadMessages();
-  }, [effectiveUserId, authFetch]);
-
-  // Save messages to database when they change
-  // Only save SEALED messages (complete, not still streaming)
-  useEffect(() => {
-    if (isLoading || !effectiveUserId) return;
-
-    async function saveMessages() {
-      for (const msg of messages) {
-        // Only save messages that are sealed (complete)
-        // This prevents saving on every transcript chunk during streaming
-        if (!sealedMessageIdsRef.current.has(msg.id)) continue;
-        
-        const savedContent = lastSavedRef.current.get(msg.id);
-        if (savedContent === undefined) {
-          // Mark as "in-flight" IMMEDIATELY to prevent concurrent duplicate inserts
-          // This prevents race conditions when multiple effect calls run concurrently
-          lastSavedRef.current.set(msg.id, msg.content);
-          
-          // New message - insert with language info
-          const res = await authFetch("/api/messages", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-              id: msg.id, 
-              role: msg.role, 
-              content: msg.content,
-              language: msg.language,
-              useLatinLetters: msg.useLatinLetters,
-              provider: msg.provider,
-            }),
-          });
-          
-          // Show sign-in suggestion after threshold
-          if (res.ok) {
-            const data = await res.json();
-            if (data.isAnonymous && data.messageCount >= SHOW_SIGNIN_AFTER_MESSAGES) {
-              setShowSignInPrompt(true);
-            }
-          }
-        } else if (savedContent !== msg.content) {
-          // Mark as "in-flight" IMMEDIATELY to prevent concurrent duplicate updates
-          lastSavedRef.current.set(msg.id, msg.content);
-          
-          // Existing message - update
-          await authFetch("/api/messages", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: msg.id, content: msg.content, update: true }),
-          });
-        }
-      }
-    }
-    saveMessages();
-  }, [messages, isLoading, effectiveUserId, authFetch, saveTrigger]);
-
-  const romanizationRule = langIsNonLatin && useLatinLetters ? `
-IMPORTANT - USE LATIN LETTERS:
-ALWAYS use romanized/transliterated text instead of native script:
-- Chinese: Use pinyin (e.g., "Nǐ hǎo" not "你好")
-- Japanese: Use romaji (e.g., "Konnichiwa" not "こんにちは")
-- Korean: Use romanization (e.g., "Annyeonghaseyo" not "안녕하세요")
-- Arabic: Use transliteration (e.g., "Marhaba" not "مرحبا")
-- Hindi: Use transliteration (e.g., "Namaste" not "नमस्ते")
-- Greek: Use transliteration (e.g., "Kalimera" not "Καλημέρα")
-- Russian: Use transliteration (e.g., "Privet" not "Привет")
-- Hebrew: Use transliteration (e.g., "Shalom" not "שלום")
-- For any other non-Latin script: Use standard romanization
-This helps learners focus on speaking without needing to learn new alphabets.
-` : "";
-
-  const systemInstruction = `You are a friendly language tutor helping someone practice ${lang}. Speak ONLY in ${lang} at all times.
-${romanizationRule}
-Control tokens (respond to these but never mention or acknowledge them directly):
-- <START> - Begin a new conversation with a warm greeting and simple question
-- <CONTINUE> - Resume conversation naturally from where you left off
-- <CONTEXT date="..." time="..." timezone="..." location="..." /> - Background info about the user. Use subtly, don't explicitly mention unless relevant.
-- <LANGUAGE_SWITCH to="..." /> - IMMEDIATELY switch to the specified language. From that point, speak ONLY in the new language.
-- <SCRIPT_MODE mode="latin|native" /> - Switch how you write: "latin" = use romanized letters (pinyin, romaji, etc.), "native" = use the language's native script.
-
-Game tokens (seamlessly integrate into conversation):
-IMPORTANT RULES FOR ALL GAMES:
-1. Do 3 rounds automatically, then ask if the user wants to continue.
-2. Be CRITICAL and PRECISE with feedback - don't just say "good job!" The user wants to learn, so point out ALL errors, mispronunciations, grammar issues, and areas for improvement. Be constructive but thorough - being too nice doesn't help them improve.
-
-- <GAME type="read-aloud" /> - Generate a short text (1-3 sentences) in ${lang} for the user to read aloud. Say a brief intro, then say "READ_ALOUD:" followed by the exact text in romanized form (DO NOT say the text before the marker). The text will be displayed visually. Wait for the user to read it, then give DETAILED and CRITICAL feedback on pronunciation: identify exact mispronounced words, explain correct pronunciation phonetically, note rhythm/intonation issues. Be thorough and honest, not just nice. After 3 texts, ask if they want to continue.
-
-- <GAME type="guess-word" /> - Think of a word/concept in ${lang} appropriate for the user's level. Describe it WITHOUT saying the word: what category it belongs to, what it looks/sounds/feels like, where you find it, what you do with it. Give 2-3 clues initially. If user guesses wrong, give another hint. If correct, celebrate and move to the next word. If stuck after 3 guesses, reveal the answer. After 3 words, ask if they want to continue.
-
-For EACH user response (in normal conversation):
-1. ECHO: Briefly paraphrase what the user said (from your perspective) to confirm understanding
-2. CORRECT/ENRICH (optional): Only if there's a clear mistake to fix OR a notably better way to say something - otherwise skip this
-3. CONTINUE: Respond naturally with a follow-up question or comment
-
-Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
+  const systemInstruction = buildSystemInstruction({
+    language: lang,
+    isNonLatin: langIsNonLatin,
+    useLatinLetters,
+  });
 
   // Handle transcript - append to existing bubble if same speaker and not sealed
-  const handleTranscript = useCallback((role: "user" | "assistant", text: string) => {
-    setMessages((prev) => {
-      const lastMessage = prev[prev.length - 1];
-      const isSealed = lastMessage && sealedMessageIdsRef.current.has(lastMessage.id);
-      
-      if (isSealed || !lastMessage || lastMessage.role !== role) {
-        return [...prev, { 
-          id: crypto.randomUUID(), 
-          role, 
-          content: text,
-          language: lang,
-          useLatinLetters,
-          provider: selectedProvider,
-        }];
-      }
-      return [
-        ...prev.slice(0, -1),
-        { ...lastMessage, content: lastMessage.content + text },
-      ];
-    });
-  }, [lang, useLatinLetters, selectedProvider]);
-
-  const handleUserTranscript = useCallback((text: string) => handleTranscript("user", text), [handleTranscript]);
-  const handleModelTranscript = useCallback((text: string) => handleTranscript("assistant", text), [handleTranscript]);
+  const handleUserTranscript = useCallback((text: string) => {
+    addTranscript("user", text, { language: lang, useLatinLetters, provider: selectedProvider });
+  }, [addTranscript, lang, useLatinLetters, selectedProvider]);
+  
+  const handleModelTranscript = useCallback((text: string) => {
+    addTranscript("assistant", text, { language: lang, useLatinLetters, provider: selectedProvider });
+  }, [addTranscript, lang, useLatinLetters, selectedProvider]);
 
   const liveProvider = useLiveProvider({
     provider: selectedProvider,
@@ -380,25 +165,14 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
 
   // Track previous isModelSpeaking state to detect when model STOPS speaking
   const wasModelSpeakingRef = useRef(false);
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages; // Keep ref updated
   const langRef = useRef(lang);
   langRef.current = lang;
   const useLatinLettersRef = useRef(useLatinLetters);
   useLatinLettersRef.current = useLatinLetters;
 
-  // Helper: seal the last message of a given role and trigger save
-  const sealLastMessageOfRole = useCallback((role: "user" | "assistant") => {
-    const currentMessages = messagesRef.current;
-    for (let i = currentMessages.length - 1; i >= 0; i--) {
-      if (currentMessages[i].role === role) {
-        sealedMessageIdsRef.current.add(currentMessages[i].id);
-        setSaveTrigger(t => t + 1);
-        break;
-      }
-    }
-  }, []);
-
+  // Track message count when model stopped speaking (to detect if user has spoken)
+  const messageCountWhenModelStoppedRef = useRef<number>(-1);
+  
   // Handle turn transitions: seal messages and generate suggestions
   useEffect(() => {
     const wasModelSpeaking = wasModelSpeakingRef.current;
@@ -409,14 +183,15 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
 
     // Model just STARTED speaking → user's turn is complete
     if (modelJustStarted) {
-      sealLastMessageOfRole("user");
+      sealLastOfRole("user");
       setSuggestions([]);
       setSuggestionsAfterMessageIndex(-1);
     }
 
     // Model just STOPPED speaking → model's turn is complete
     if (modelJustStopped) {
-      sealLastMessageOfRole("assistant");
+      sealLastOfRole("assistant");
+      messageCountWhenModelStoppedRef.current = messagesRef.current.length;
     }
 
     // Clear suggestion timer if model starts speaking or disconnects
@@ -436,6 +211,12 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
       suggestionTimerRef.current = null;
       
       const currentMessages = messagesRef.current;
+      
+      // Check if user has started talking (new messages since model stopped)
+      if (currentMessages.length > messageCountWhenModelStoppedRef.current) {
+        return; // User has spoken, don't show suggestions
+      }
+      
       const lastAssistantMessage = [...currentMessages].reverse().find(m => m.role === "assistant");
       if (!lastAssistantMessage || lastAiMessageIdForSuggestionsRef.current === lastAssistantMessage.id) return;
       
@@ -454,16 +235,18 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
 
         if (res.ok) {
           const data = await res.json();
-          if (data.suggestions?.length > 0) {
+          // Only show suggestions if user still hasn't spoken
+          const latestMessages = messagesRef.current;
+          if (data.suggestions?.length > 0 && latestMessages.length <= messageCountWhenModelStoppedRef.current) {
             setSuggestions(data.suggestions);
-            setSuggestionsAfterMessageIndex(currentMessages.length - 1);
+            setSuggestionsAfterMessageIndex(latestMessages.length - 1);
           }
         }
       } catch (err) {
         console.error("Failed to fetch suggestions:", err);
       }
     }, 5000);
-  }, [liveProvider.status, liveProvider.isModelSpeaking, sealLastMessageOfRole]);
+  }, [liveProvider.status, liveProvider.isModelSpeaking, sealLastOfRole]);
 
 
   // Handle orb click - simple on/off toggle
@@ -472,19 +255,19 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
       const token = await getEphemeralToken(selectedProvider);
       if (!token) return console.error("Failed to get ephemeral token");
       
-      sealAllMessages();
+      sealAll();
       const context = await getUserContext();
       const history = messages.map(m => ({ role: m.role, content: m.content }));
       await liveProvider.startSession(token, history, context);
     } else {
-      sealAllMessages();
+      sealAll();
       liveProvider.disconnect();
     }
   };
 
   // Handle game selection - works even when not connected
   const handleGameSelect = async (gameId: string) => {
-    sealAllMessages();
+    sealAll();
     setReadAloudText(null);
     cardSourceMessageIdRef.current = null;
     
@@ -518,18 +301,14 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
   const isActive = liveProvider.status === "connected" || liveProvider.status === "connecting";
 
   if (isLoading) {
-    return (
-      <div className="w-full flex items-center justify-center py-20">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
+    return <LoadingSpinner />;
   }
 
   // Handle provider switch - automatically restart session with new provider
   const handleProviderSwitch = async (newProvider: ProviderType) => {
     if (newProvider === selectedProvider) return;
     
-    sealAllMessages();
+    sealAll();
     setSelectedProvider(newProvider);
     
     if (isActive) {
@@ -560,7 +339,7 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
           onSelectLanguage={(newLang) => {
             setSelectedLanguage(newLang);
             if (liveProvider.status === "connected") {
-              sealAllMessages();
+              sealAll();
               const newLangCode = getLanguageCode(newLang);
               if (newLangCode) liveProvider.updateInputLanguage(newLangCode);
               
@@ -579,39 +358,22 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
         
         {/* Latin letters toggle - only for non-Latin script languages */}
         {langIsNonLatin && (
-          <div className="flex items-center justify-center gap-3 mt-3">
-            <button
-              onClick={() => {
-                const newValue = !useLatinLetters;
+          <div className="flex items-center justify-center mt-3">
+            <Toggle
+              checked={useLatinLetters}
+              onChange={(newValue) => {
                 setScriptMode(lang, newValue);
                 if (liveProvider.status === "connected") {
-                  sealAllMessages();
+                  sealAll();
                   const prompt = newValue
                     ? `<SCRIPT_MODE mode="latin" /> From now on, ALWAYS use romanized/Latin letters instead of native script. For example: use "Nǐ hǎo" not "你好", use "Konnichiwa" not "こんにちは". Acknowledge briefly.`
                     : `<SCRIPT_MODE mode="native" /> From now on, use the native script/alphabet of the language (not romanization). For example: use "你好" not "Nǐ hǎo", use "こんにちは" not "Konnichiwa". Acknowledge briefly.`;
                   liveProvider.sendPrompt(prompt);
                 }
               }}
-              className={`relative w-11 h-6 rounded-full transition-colors duration-200 border ${
-                useLatinLetters 
-                  ? "bg-primary/20 border-primary" 
-                  : "bg-secondary/50 border-border"
-              }`}
-              role="switch"
-              aria-checked={useLatinLetters}
-            >
-              <span
-                className={`absolute top-1/2 -translate-y-1/2 left-0.5 w-5 h-5 rounded-full shadow-sm transition-transform duration-200 ${
-                  useLatinLetters 
-                    ? "translate-x-[18px] bg-primary" 
-                    : "translate-x-0 bg-muted-foreground/50"
-                }`}
-              />
-            </button>
-            <span className="text-sm text-muted-foreground flex items-center gap-1.5">
-              Latin letters
-              <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-secondary/50 text-muted-foreground/80">ABC</span>
-            </span>
+              label="Latin letters"
+              badge="ABC"
+            />
           </div>
         )}
         
@@ -687,20 +449,13 @@ Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
                 if (liveProvider.status === "connected") {
                   liveProvider.disconnect();
                 }
-                await authFetch("/api/messages", { method: "DELETE" });
-                setMessages([]);
-                lastSavedRef.current.clear();
-                sealedMessageIdsRef.current.clear();
+                await clearHistory();
               }
             }}
             className="absolute top-2 right-2 p-1.5 rounded-full text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10 transition-colors"
             title="Clear chat history"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
-              <path d="M3 6h18" />
-              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-            </svg>
+            <TrashIcon />
           </button>
           <ConversationPanel
             messages={messages}

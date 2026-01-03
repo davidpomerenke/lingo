@@ -18,6 +18,7 @@ import type {
   FunctionDefinition, 
   FunctionResult 
 } from "./live-provider";
+import { blobToBase64, base64ToPcmBlob } from "./audio-utils";
 
 // OpenAI Realtime event types
 interface RealtimeEvent {
@@ -174,12 +175,7 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
       case "response.audio.delta":
         // Audio chunk received - convert base64 to blob and send immediately
         if (event.delta && typeof event.delta === "string") {
-          const binaryString = atob(event.delta);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          const blob = new Blob([bytes], { type: "audio/pcm;rate=24000" });
+          const blob = base64ToPcmBlob(event.delta, 24000);
           this.callbacks.onAudio?.(blob);
         }
         break;
@@ -402,18 +398,10 @@ Continue the conversation naturally based on the above context.`;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     try {
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      
       // OpenAI expects 24kHz audio, but we're recording at 16kHz
       // For now, we'll send as-is and rely on OpenAI to handle it
       // TODO: Implement proper resampling from 16kHz to 24kHz
-      
-      let binary = "";
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      const base64Data = btoa(binary);
+      const base64Data = await blobToBase64(audioBlob);
 
       this.send({
         type: "input_audio_buffer.append",

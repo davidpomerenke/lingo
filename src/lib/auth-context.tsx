@@ -23,6 +23,7 @@ interface AuthContextType {
   login: (email: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   getEphemeralToken: (provider: "gemini" | "openai") => Promise<string | null>;
+  authFetch: (url: string, options?: RequestInit) => Promise<Response>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -261,6 +262,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [sessionId, anonId]);
 
+  // Helper to make authenticated API calls
+  const authFetch = useCallback((url: string, options: RequestInit = {}): Promise<Response> => {
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string>),
+    };
+    
+    // Add appropriate auth header
+    if (sessionId) {
+      headers["x-session-id"] = sessionId;
+    } else if (anonId) {
+      headers["x-anon-id"] = anonId;
+    }
+    
+    return fetch(url, { ...options, headers });
+  }, [sessionId, anonId]);
+
   const isAnonymous = !user && !!anonId;
   const effectiveUserId = user?.id || anonId;
 
@@ -276,7 +293,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setScriptMode,
       login, 
       logout, 
-      getEphemeralToken 
+      getEphemeralToken,
+      authFetch,
     }}>
       {children}
     </AuthContext.Provider>
