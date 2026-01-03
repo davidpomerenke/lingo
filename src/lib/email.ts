@@ -57,6 +57,35 @@ export async function sendMagicLinkEmail(
   });
 }
 
+// Notify admin of API quota exhaustion
+export async function sendQuotaExhaustedNotification(
+  provider: "openai" | "gemini",
+  errorMessage: string
+): Promise<void> {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  if (!adminEmail) return; // Skip if not configured
+
+  try {
+    await transporter.sendMail({
+      from: `Lingo <${process.env.SMTP_USER}>`,
+      to: adminEmail,
+      subject: `⚠️ Lingo: ${provider.toUpperCase()} API quota exhausted`,
+      text: `The ${provider} API quota has been exhausted!\n\nError: ${errorMessage}\nTime: ${new Date().toISOString()}\n\nPlease add funds to the account.`,
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px;">
+          <h2>⚠️ API Quota Exhausted</h2>
+          <p><strong>Provider:</strong> ${provider.toUpperCase()}</p>
+          <p><strong>Error:</strong> ${errorMessage}</p>
+          <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+          <p style="color: #e11d48; font-weight: bold;">Please add funds to continue service.</p>
+        </div>
+      `,
+    });
+  } catch (error) {
+    console.error("Failed to send quota notification:", error);
+  }
+}
+
 // Notify admin of new user registration
 export async function sendNewUserNotification(userEmail: string): Promise<void> {
   const adminEmail = process.env.ADMIN_EMAIL;

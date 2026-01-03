@@ -65,7 +65,6 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       
       // Get the actual sample rate the browser is using
       const actualSampleRate = audioContext.sampleRate;
-      console.log(`Audio recording: device=${actualSampleRate}Hz, target=${targetSampleRate}Hz`);
       
       const source = audioContext.createMediaStreamSource(stream);
       sourceRef.current = source;

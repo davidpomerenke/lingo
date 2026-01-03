@@ -81,7 +81,6 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
       ]);
 
       this.ws.onopen = async () => {
-        console.log("OpenAI Realtime: Connected");
         await this.configureSession();
         this.callbacks.onOpen?.();
         resolve();
@@ -102,8 +101,7 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
         reject(new Error("WebSocket error"));
       };
 
-      this.ws.onclose = (event) => {
-        console.log("OpenAI Realtime: Disconnected", event.reason);
+      this.ws.onclose = () => {
         this.callbacks.onClose?.();
       };
     });
@@ -158,12 +156,9 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
   private handleEvent(event: RealtimeEvent): void {
     switch (event.type) {
       case "session.created":
-        console.log("OpenAI: Session created");
         break;
 
       case "session.updated":
-        const session = event.session as Record<string, unknown> | undefined;
-        console.log("OpenAI: Session configured", session?.modalities);
         // Resolve the session ready promise (initial configuration)
         if (this.sessionReadyResolve) {
           this.sessionReadyResolve();
@@ -218,10 +213,33 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
         }
         break;
 
-      case "response.done":
-        // Turn complete
+      case "response.done": {
+        // Check if the response failed
+        const response = event.response as { status?: string; status_details?: { error?: { type?: string; message?: string } } } | undefined;
+        if (response?.status === "failed" && response?.status_details?.error) {
+          const error = response.status_details.error;
+          const errorMessage = error.message || "Unknown error";
+          const errorType = error.type || "unknown";
+          
+          console.error("OpenAI: Response failed:", errorType, errorMessage);
+          
+          // Report quota errors to backend for admin notification
+          if (errorType === "insufficient_quota") {
+            this.reportErrorToBackend("openai", errorType, errorMessage);
+          }
+          
+          // Create user-friendly error message
+          let userMessage = errorMessage;
+          if (errorType === "insufficient_quota") {
+            userMessage = "OpenAI API quota exceeded. Please try Gemini instead.";
+          }
+          
+          this.callbacks.onError?.(new Error(userMessage));
+        }
+        
         this.callbacks.onTurnComplete?.();
         break;
+      }
 
       case "response.function_call_arguments.done":
         // Function call received
@@ -262,12 +280,23 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
       case "input_audio_buffer.speech_stopped":
       case "input_audio_buffer.committed":
       case "conversation.item.created":
+      case "conversation.item.input_audio_transcription.failed":
       case "rate_limits.updated":
         break;
 
       default:
+        // Log unhandled events for debugging
         console.log("OpenAI: Unhandled event:", event.type);
     }
+  }
+
+  private reportErrorToBackend(provider: string, errorType: string, errorMessage: string): void {
+    // Fire and forget - don't await
+    fetch("/api/report-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, errorType, errorMessage }),
+    }).catch(err => console.error("Failed to report error:", err));
   }
 
   private send(event: RealtimeEvent): void {
@@ -433,7 +462,6 @@ Continue the conversation naturally based on the above context.`;
   updateInputLanguage(language: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     
-    console.log("OpenAI: Updating input language to", language);
     this.send({
       type: "session.update",
       session: {

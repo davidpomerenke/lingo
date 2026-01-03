@@ -83,7 +83,6 @@ export class GeminiLiveAdapter implements LiveProvider {
       config: sessionConfig,
       callbacks: {
         onopen: () => {
-          console.log("Gemini Live: Connected");
           this.callbacks.onOpen?.();
         },
         onmessage: (message: LiveServerMessage) => {
@@ -91,10 +90,21 @@ export class GeminiLiveAdapter implements LiveProvider {
         },
         onerror: (e: ErrorEvent) => {
           console.error("Gemini Live Error:", e.message);
-          this.callbacks.onError?.(new Error(e.message));
+          
+          // Check for quota-related errors
+          const errorMessage = e.message || "";
+          const isQuotaError = errorMessage.includes("RESOURCE_EXHAUSTED") || 
+                               errorMessage.includes("quota") ||
+                               errorMessage.includes("billing");
+          
+          if (isQuotaError) {
+            this.reportErrorToBackend("gemini", "RESOURCE_EXHAUSTED", errorMessage);
+            this.callbacks.onError?.(new Error("Gemini API quota exceeded. Please try OpenAI instead."));
+          } else {
+            this.callbacks.onError?.(new Error(e.message));
+          }
         },
-        onclose: (e: CloseEvent) => {
-          console.log("Gemini Live: Disconnected", e.reason);
+        onclose: () => {
           this.callbacks.onClose?.();
         },
       },
@@ -226,6 +236,15 @@ export class GeminiLiveAdapter implements LiveProvider {
 
   isConnected(): boolean {
     return this.session !== null;
+  }
+
+  private reportErrorToBackend(provider: string, errorType: string, errorMessage: string): void {
+    // Fire and forget - don't await
+    fetch("/api/report-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, errorType, errorMessage }),
+    }).catch(err => console.error("Failed to report error:", err));
   }
 }
 
