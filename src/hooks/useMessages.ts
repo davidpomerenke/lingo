@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import type { Message } from "@/types/message";
 import { useAuth } from "@/lib/auth-context";
 
-const SHOW_SIGNIN_AFTER_MESSAGES = 20;
+const SHOW_SIGNIN_AFTER_MESSAGES = 10;
 
 interface UseMessagesOptions {
   onSignInPrompt?: () => void;

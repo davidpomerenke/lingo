@@ -147,7 +147,16 @@ export function VoiceChat() {
           notes?: string;
         };
         
-        // Create flashcard immediately for UI (with timestamp for ordering)
+        // Create flashcard immediately for UI (position after the last user message, before AI reply)
+        // Find the last user message index
+        let lastUserMessageIndex = -1;
+        for (let i = messagesRef.current.length - 1; i >= 0; i--) {
+          if (messagesRef.current[i].role === "user") {
+            lastUserMessageIndex = i;
+            break;
+          }
+        }
+        
         const flashcard: Flashcard = {
           id: crypto.randomUUID(),
           concept: args.concept,
@@ -155,6 +164,7 @@ export function VoiceChat() {
           context: args.context,
           notes: args.notes,
           createdAt: new Date().toISOString(),
+          afterMessageIndex: lastUserMessageIndex, // Position after user's message, before AI's reply
         };
         
         setFlashcards(prev => [...prev, flashcard]);
@@ -522,6 +532,7 @@ export function VoiceChat() {
           <ConversationPanel
             messages={messages}
             flashcards={flashcards}
+            onDeleteFlashcard={(id) => setFlashcards(prev => prev.filter(f => f.id !== id))}
             isModelSpeaking={liveProvider.isModelSpeaking}
             currentLanguage={selectedLanguage}
             suggestions={suggestions}

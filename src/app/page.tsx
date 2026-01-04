@@ -29,7 +29,7 @@ export default function Home() {
       <div className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4 py-12">
         {/* User menu */}
         <div className="absolute top-4 right-4 flex items-center gap-3">
-          {user ? (
+          {user?.email ? (
             <>
               <span className="text-sm text-muted-foreground">{user.email}</span>
               <button

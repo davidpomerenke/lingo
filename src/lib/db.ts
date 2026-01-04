@@ -9,7 +9,7 @@ const client = createClient({
 
 export interface DbUser {
   id: string;
-  email: string;
+  email: string | null; // null for anonymous users
   languages: string[]; // User's selected languages
   script_modes: Record<string, boolean>; // Per-language: true = Latin letters, false = native script
   created_at: string;
@@ -24,6 +24,7 @@ export interface DbSession {
 export interface DbAuthToken {
   token: string;
   email: string;
+  user_id?: string; // User to claim when verifying (for anonymous → signed-in)
   expires_at: string;
   used: number;
 }
@@ -68,56 +69,24 @@ let dbInitialized = false;
 export async function initDb() {
   if (dbInitialized) return;
   dbInitialized = true;
-  // Users table
+
+  // Users table (email is nullable for anonymous users)
   await client.execute(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
+      email TEXT UNIQUE,
       languages TEXT DEFAULT '["English","Spanish","French","Italian","German","Arabic","Hindi","Japanese","Korean","Chinese"]',
+      script_modes TEXT DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
-  
-  // Add languages column if it doesn't exist (migration)
-  try {
-    await client.execute(`ALTER TABLE users ADD COLUMN languages TEXT DEFAULT '["English","Spanish","French","Italian","German","Arabic","Hindi","Japanese","Korean","Chinese"]'`);
-  } catch {
-    // Column already exists
-  }
-  
-  // Add script_modes column if it doesn't exist (migration)
-  try {
-    await client.execute(`ALTER TABLE users ADD COLUMN script_modes TEXT DEFAULT '{}'`);
-  } catch {
-    // Column already exists
-  }
-  
-  // Add language column to messages if it doesn't exist (migration)
-  try {
-    await client.execute(`ALTER TABLE messages ADD COLUMN language TEXT`);
-  } catch {
-    // Column already exists
-  }
-  
-  // Add use_latin_letters column to messages if it doesn't exist (migration)
-  try {
-    await client.execute(`ALTER TABLE messages ADD COLUMN use_latin_letters INTEGER`);
-  } catch {
-    // Column already exists
-  }
-  
-  // Add provider column to messages if it doesn't exist (migration)
-  try {
-    await client.execute(`ALTER TABLE messages ADD COLUMN provider TEXT`);
-  } catch {
-    // Column already exists
-  }
 
   // Auth tokens for magic links (short-lived)
   await client.execute(`
     CREATE TABLE IF NOT EXISTS auth_tokens (
       token TEXT PRIMARY KEY,
       email TEXT NOT NULL,
+      user_id TEXT,
       expires_at TEXT NOT NULL,
       used INTEGER DEFAULT 0
     )
@@ -133,20 +102,22 @@ export async function initDb() {
     )
   `);
 
-  // Messages with user_id
+  // Messages
   await client.execute(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       user_id TEXT,
       role TEXT NOT NULL,
       content TEXT NOT NULL,
+      language TEXT,
+      use_latin_letters INTEGER,
+      provider TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
 
   // Concepts (flashcards) for spaced repetition
-  // Note: No foreign key on user_id to support anonymous users
   await client.execute(`
     CREATE TABLE IF NOT EXISTS concepts (
       id TEXT PRIMARY KEY,
@@ -165,7 +136,8 @@ export async function initDb() {
       prod_due TEXT,
       prod_reps INTEGER DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_reviewed TEXT
+      last_reviewed TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
 }
@@ -217,7 +189,7 @@ export async function getUserById(id: string): Promise<DbUser | null> {
   const row = result.rows[0];
   return {
     id: row.id as string,
-    email: row.email as string,
+    email: row.email as string | null,
     languages: parseLanguages(row.languages as string | null),
     script_modes: parseScriptModes(row.script_modes as string | null),
     created_at: row.created_at as string,
@@ -237,6 +209,39 @@ export async function createUser(email: string): Promise<DbUser> {
     script_modes: {},
     created_at: new Date().toISOString() 
   };
+}
+
+// Create an anonymous user (no email)
+export async function createAnonymousUser(): Promise<DbUser> {
+  const id = crypto.randomUUID();
+  await client.execute({
+    sql: "INSERT INTO users (id, email) VALUES (?, NULL)",
+    args: [id],
+  });
+  return { 
+    id, 
+    email: null, 
+    languages: DEFAULT_LANGUAGES,
+    script_modes: {},
+    created_at: new Date().toISOString() 
+  };
+}
+
+// Claim an anonymous user by setting their email (used when signing in)
+export async function claimUser(userId: string, email: string): Promise<DbUser | null> {
+  // Check if email is already taken by another user
+  const existingWithEmail = await getUserByEmail(email);
+  if (existingWithEmail && existingWithEmail.id !== userId) {
+    // Email already belongs to a different user - merge needed
+    return null;
+  }
+  
+  await client.execute({
+    sql: "UPDATE users SET email = ? WHERE id = ?",
+    args: [email.toLowerCase(), userId],
+  });
+  
+  return getUserById(userId);
 }
 
 export async function getOrCreateUser(email: string): Promise<{ user: DbUser; isNew: boolean }> {
@@ -264,21 +269,22 @@ export { DEFAULT_LANGUAGES };
 
 // ============ Auth Tokens (Magic Links) ============
 
-export async function createAuthToken(email: string): Promise<string> {
+export async function createAuthToken(email: string, userId?: string): Promise<string> {
   const token = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutes
   
   await client.execute({
-    sql: "INSERT INTO auth_tokens (token, email, expires_at) VALUES (?, ?, ?)",
-    args: [token, email.toLowerCase(), expiresAt],
+    sql: "INSERT INTO auth_tokens (token, email, user_id, expires_at) VALUES (?, ?, ?, ?)",
+    args: [token, email.toLowerCase(), userId ?? null, expiresAt],
   });
   
   return token;
 }
 
-export async function verifyAuthToken(token: string): Promise<string | null> {
+// Returns { email, userId } or null if invalid
+export async function verifyAuthToken(token: string): Promise<{ email: string; userId?: string } | null> {
   const result = await client.execute({
-    sql: "SELECT email, expires_at, used FROM auth_tokens WHERE token = ?",
+    sql: "SELECT email, user_id, expires_at, used FROM auth_tokens WHERE token = ?",
     args: [token],
   });
   
@@ -298,7 +304,10 @@ export async function verifyAuthToken(token: string): Promise<string | null> {
     args: [token],
   });
   
-  return row.email as string;
+  return { 
+    email: row.email as string,
+    userId: row.user_id as string | undefined,
+  };
 }
 
 // Clean up old tokens periodically

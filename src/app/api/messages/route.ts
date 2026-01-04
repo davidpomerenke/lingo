@@ -1,41 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
-import { initDb, getSession, getMessages, addMessage, updateMessage, clearMessages, countMessages } from "@/lib/db";
+import { initDb, getSession, getUserById, getMessages, addMessage, updateMessage, clearMessages, countMessages } from "@/lib/db";
 
-// Helper to get effective user ID (authenticated or anonymous)
-async function getEffectiveUserId(request: NextRequest): Promise<string | null> {
+// Helper to get user info from session
+async function getUserFromSession(request: NextRequest): Promise<{ userId: string; isAnonymous: boolean } | null> {
   const sessionId = request.headers.get("x-session-id");
-  const anonId = request.headers.get("x-anon-id");
   
-  if (sessionId) {
-    await initDb();
-    const session = await getSession(sessionId);
-    if (session) return session.user_id;
-  }
+  if (!sessionId) return null;
   
-  // Fall back to anonymous ID
-  if (anonId && anonId.startsWith("anon_")) {
-    return anonId;
-  }
+  await initDb();
+  const session = await getSession(sessionId);
+  if (!session) return null;
   
-  return null;
+  const user = await getUserById(session.user_id);
+  if (!user) return null;
+  
+  return {
+    userId: user.id,
+    isAnonymous: !user.email, // Anonymous if no email
+  };
 }
 
-// GET - fetch all messages for user (authenticated or anonymous)
+// GET - fetch all messages for user
 export async function GET(request: NextRequest) {
   try {
-    const userId = await getEffectiveUserId(request);
-    if (!userId) {
+    const userInfo = await getUserFromSession(request);
+    if (!userInfo) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     await initDb();
-    const messages = await getMessages(userId);
+    const messages = await getMessages(userInfo.userId);
     const messageCount = messages.length;
     
     return NextResponse.json({ 
       messages, 
       messageCount,
-      isAnonymous: userId.startsWith("anon_"),
+      isAnonymous: userInfo.isAnonymous,
     });
   } catch (error) {
     console.error("Failed to get messages:", error);
@@ -46,8 +46,8 @@ export async function GET(request: NextRequest) {
 // POST - add or update a message
 export async function POST(request: NextRequest) {
   try {
-    const userId = await getEffectiveUserId(request);
-    if (!userId) {
+    const userInfo = await getUserFromSession(request);
+    if (!userInfo) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -57,16 +57,16 @@ export async function POST(request: NextRequest) {
     if (update) {
       await updateMessage(id, content);
     } else {
-      await addMessage(id, userId, role, content, language, useLatinLetters, provider);
+      await addMessage(id, userInfo.userId, role, content, language, useLatinLetters, provider);
     }
     
     // Return current message count
-    const messageCount = await countMessages(userId);
+    const messageCount = await countMessages(userInfo.userId);
     
     return NextResponse.json({ 
       success: true,
       messageCount,
-      isAnonymous: userId.startsWith("anon_"),
+      isAnonymous: userInfo.isAnonymous,
     });
   } catch (error) {
     console.error("Failed to save message:", error);
@@ -77,13 +77,13 @@ export async function POST(request: NextRequest) {
 // DELETE - clear all messages for user
 export async function DELETE(request: NextRequest) {
   try {
-    const userId = await getEffectiveUserId(request);
-    if (!userId) {
+    const userInfo = await getUserFromSession(request);
+    if (!userInfo) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     await initDb();
-    await clearMessages(userId);
+    await clearMessages(userInfo.userId);
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Failed to clear messages:", error);

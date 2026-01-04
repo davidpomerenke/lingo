@@ -47,7 +47,7 @@ export const GAME_FUNCTIONS: FunctionDefinition[] = [
       properties: {
         concept: {
           type: "string",
-          description: "The concept to learn, e.g. 'acheter (to buy)' or 'passé composé with être verbs'",
+          description: "The concept to learn. For vocabulary: just the word (e.g. 'acheter'). Only include translation if the meaning is ambiguous or non-obvious. For grammar: brief description (e.g. 'passé composé with être verbs').",
         },
         type: {
           type: "string",

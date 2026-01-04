@@ -11,6 +11,7 @@ const ONBOARDING_KEY = "lingo-translate-tip-seen";
 interface ConversationPanelProps {
   messages: Message[];
   flashcards?: Flashcard[];
+  onDeleteFlashcard?: (id: string) => void;
   isModelSpeaking: boolean;
   currentLanguage?: string;
   suggestions?: string[];
@@ -87,20 +88,39 @@ type ConversationItem =
   | { type: "message"; data: Message; messageIndex: number }
   | { type: "flashcard"; data: Flashcard };
 
-export function ConversationPanel({ messages, flashcards = [], isModelSpeaking, currentLanguage, suggestions = [], suggestionsAfterMessageIndex = -1 }: ConversationPanelProps) {
-  // Build unified list: messages with flashcards rendered at end (for now)
-  // In Phase 1, we show flashcards at the end. Future: track message index when created.
+export function ConversationPanel({ messages, flashcards = [], onDeleteFlashcard, isModelSpeaking, currentLanguage, suggestions = [], suggestionsAfterMessageIndex = -1 }: ConversationPanelProps) {
+  // Build unified list: messages with flashcards inserted at their creation position
   const conversationItems = useMemo((): ConversationItem[] => {
     const items: ConversationItem[] = [];
     
-    // Add all messages in order
-    messages.forEach((msg, index) => {
-      items.push({ type: "message", data: msg, messageIndex: index });
+    // Group flashcards by their afterMessageIndex
+    const flashcardsByIndex = new Map<number, Flashcard[]>();
+    flashcards.forEach((fc) => {
+      const idx = fc.afterMessageIndex;
+      if (!flashcardsByIndex.has(idx)) {
+        flashcardsByIndex.set(idx, []);
+      }
+      flashcardsByIndex.get(idx)!.push(fc);
     });
     
-    // Add all flashcards at the end (they appear as AI creates them)
+    // Interleave messages and flashcards
+    messages.forEach((msg, index) => {
+      items.push({ type: "message", data: msg, messageIndex: index });
+      
+      // Add any flashcards that should appear after this message
+      const fcs = flashcardsByIndex.get(index);
+      if (fcs) {
+        fcs.forEach((fc) => {
+          items.push({ type: "flashcard", data: fc });
+        });
+      }
+    });
+    
+    // Add any flashcards with index >= messages.length (shouldn't happen but just in case)
     flashcards.forEach((fc) => {
-      items.push({ type: "flashcard", data: fc });
+      if (fc.afterMessageIndex >= messages.length) {
+        items.push({ type: "flashcard", data: fc });
+      }
     });
     
     return items;
@@ -302,8 +322,13 @@ export function ConversationPanel({ messages, flashcards = [], isModelSpeaking, 
       return; // Let handleMouseUp deal with selections
     }
 
-    // Find the word at click position
+    // Ignore clicks on flashcard elements
     const target = e.target as HTMLElement;
+    if (target.closest("[data-flashcard]")) {
+      return;
+    }
+
+    // Find the word at click position
     if (!target.textContent) return;
 
     // Get caret position from click
@@ -330,8 +355,12 @@ export function ConversationPanel({ messages, flashcards = [], isModelSpeaking, 
     const boundaries = findWordBoundaries(text, offset);
     if (!boundaries) return;
     
-    const { start, end } = boundaries;
-    const word = text.slice(start, end).trim();
+    // Clamp boundaries to actual text length
+    const textLength = text.length;
+    const clampedStart = Math.min(Math.max(0, boundaries.start), textLength);
+    const clampedEnd = Math.min(Math.max(0, boundaries.end), textLength);
+    
+    const word = text.slice(clampedStart, clampedEnd).trim();
     if (!word) return;
 
     // Get position for tooltip
@@ -343,8 +372,8 @@ export function ConversationPanel({ messages, flashcards = [], isModelSpeaking, 
 
     // Create a range for the word to highlight it and get its position
     const wordRange = document.createRange();
-    wordRange.setStart(range.startContainer, start);
-    wordRange.setEnd(range.startContainer, end);
+    wordRange.setStart(range.startContainer, clampedStart);
+    wordRange.setEnd(range.startContainer, clampedEnd);
     
     // Highlight the word by selecting it
     const newSelection = window.getSelection();
@@ -401,7 +430,7 @@ export function ConversationPanel({ messages, flashcards = [], isModelSpeaking, 
               if (item.type === "flashcard") {
                 return (
                   <div key={`fc-${item.data.id}`} className="flex justify-start pl-2">
-                    <FlashcardIndicator flashcard={item.data} />
+                    <FlashcardIndicator flashcard={item.data} onDelete={onDeleteFlashcard} />
                   </div>
                 );
               }

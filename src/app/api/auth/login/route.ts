@@ -4,7 +4,7 @@ import { sendMagicLinkEmail } from "@/lib/email";
 
 export async function POST(request: NextRequest) {
   try {
-    const { email } = await request.json();
+    const { email, userId } = await request.json();
 
     if (!email || typeof email !== "string") {
       return NextResponse.json({ error: "Email is required" }, { status: 400 });
@@ -18,8 +18,8 @@ export async function POST(request: NextRequest) {
 
     await initDb();
 
-    // Create auth token
-    const token = await createAuthToken(email);
+    // Create auth token (include userId so verify can claim the user)
+    const token = await createAuthToken(email, userId);
 
     // Get base URL for magic link
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 

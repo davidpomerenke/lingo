@@ -6,7 +6,7 @@ const DEFAULT_LANGUAGES = ["English","Spanish","French","Italian","German","Arab
 
 interface User {
   id: string;
-  email: string;
+  email: string | null; // null for anonymous users
   languages: string[];
   script_modes: Record<string, boolean>;
 }
@@ -29,14 +29,11 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 const SESSION_KEY = "lingo_session";
-const ANON_KEY = "lingo_anon_id";
-const LANGUAGES_KEY = "lingo_languages";
-const SCRIPT_MODES_KEY = "lingo_script_modes";
+const USER_ID_KEY = "lingo_user_id";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [anonId, setAnonId] = useState<string | null>(null);
   const [languages, setLanguagesState] = useState<string[]>(DEFAULT_LANGUAGES);
   const [scriptModes, setScriptModesState] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -48,66 +45,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const params = new URLSearchParams(window.location.search);
       const urlSession = params.get("session");
       
-      // Get or create anonymous ID
-      let storedAnonId = localStorage.getItem(ANON_KEY);
-      if (!storedAnonId) {
-        storedAnonId = `anon_${crypto.randomUUID()}`;
-        localStorage.setItem(ANON_KEY, storedAnonId);
-      }
-      setAnonId(storedAnonId);
-      
-      // Load languages and script modes from localStorage for anonymous users
-      const storedLanguages = localStorage.getItem(LANGUAGES_KEY);
-      if (storedLanguages) {
-        try {
-          setLanguagesState(JSON.parse(storedLanguages));
-        } catch {
-          // Invalid JSON, use defaults
-        }
-      }
-      
-      const storedScriptModes = localStorage.getItem(SCRIPT_MODES_KEY);
-      if (storedScriptModes) {
-        try {
-          setScriptModesState(JSON.parse(storedScriptModes));
-        } catch {
-          // Invalid JSON, use empty object
-        }
-      }
-      
       if (urlSession) {
         // Store session and clean URL
         localStorage.setItem(SESSION_KEY, urlSession);
         window.history.replaceState({}, "", window.location.pathname);
-        
-        // Migrate anonymous data to this user
-        const anonLanguages = localStorage.getItem(LANGUAGES_KEY);
-        const anonScriptModes = localStorage.getItem(SCRIPT_MODES_KEY);
-        try {
-          await fetch("/api/auth/migrate", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-session-id": urlSession,
-            },
-            body: JSON.stringify({ 
-              anonId: storedAnonId,
-              languages: anonLanguages ? JSON.parse(anonLanguages) : null,
-              scriptModes: anonScriptModes ? JSON.parse(anonScriptModes) : null,
-            }),
-          });
-          // Clear anon data after migration
-          localStorage.removeItem(ANON_KEY);
-          localStorage.removeItem(LANGUAGES_KEY);
-          localStorage.removeItem(SCRIPT_MODES_KEY);
-          setAnonId(null);
-        } catch (e) {
-          console.error("Failed to migrate:", e);
-        }
       }
 
       // Get session from localStorage
-      const storedSession = localStorage.getItem(SESSION_KEY);
+      const storedSession = urlSession || localStorage.getItem(SESSION_KEY);
       
       if (storedSession) {
         setSessionId(storedSession);
@@ -124,18 +69,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               setUser(data.user);
               setLanguagesState(data.user.languages || DEFAULT_LANGUAGES);
               setScriptModesState(data.user.script_modes || {});
-            } else {
-              localStorage.removeItem(SESSION_KEY);
-              setSessionId(null);
+              localStorage.setItem(USER_ID_KEY, data.user.id);
+              setIsLoading(false);
+              return;
             }
-          } else {
-            localStorage.removeItem(SESSION_KEY);
-            setSessionId(null);
           }
         } catch {
-          localStorage.removeItem(SESSION_KEY);
-          setSessionId(null);
+          // Session invalid, continue to create new user
         }
+        
+        // Session was invalid, clear it
+        localStorage.removeItem(SESSION_KEY);
+      }
+      
+      // No valid session - initialize user (create or retrieve)
+      const storedUserId = localStorage.getItem(USER_ID_KEY);
+      
+      try {
+        const res = await fetch("/api/auth/init", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: storedUserId }),
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          setUser(data.user);
+          setSessionId(data.sessionId);
+          setLanguagesState(data.user.languages || DEFAULT_LANGUAGES);
+          setScriptModesState(data.user.script_modes || {});
+          localStorage.setItem(SESSION_KEY, data.sessionId);
+          localStorage.setItem(USER_ID_KEY, data.user.id);
+        }
+      } catch (e) {
+        console.error("Failed to initialize user:", e);
       }
       
       setIsLoading(false);
@@ -149,7 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, anonId }),
+        body: JSON.stringify({ email, userId: user?.id }),
       });
 
       if (!res.ok) {
@@ -161,7 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       return { success: false, error: "Network error" };
     }
-  }, [anonId]);
+  }, [user?.id]);
 
   const logout = useCallback(async () => {
     if (sessionId) {
@@ -176,21 +143,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     
     localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(USER_ID_KEY);
     setSessionId(null);
     setUser(null);
     setLanguagesState(DEFAULT_LANGUAGES);
+    setScriptModesState({});
     
-    // Create new anon ID for fresh anonymous session
-    const newAnonId = `anon_${crypto.randomUUID()}`;
-    localStorage.setItem(ANON_KEY, newAnonId);
-    setAnonId(newAnonId);
+    // Create new anonymous user
+    try {
+      const res = await fetch("/api/auth/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setUser(data.user);
+        setSessionId(data.sessionId);
+        setLanguagesState(data.user.languages || DEFAULT_LANGUAGES);
+        setScriptModesState(data.user.script_modes || {});
+        localStorage.setItem(SESSION_KEY, data.sessionId);
+        localStorage.setItem(USER_ID_KEY, data.user.id);
+      }
+    } catch (e) {
+      console.error("Failed to create new user after logout:", e);
+    }
   }, [sessionId]);
 
   const setLanguages = useCallback(async (newLanguages: string[]) => {
     setLanguagesState(newLanguages);
+    setUser(prev => prev ? { ...prev, languages: newLanguages } : null);
     
     if (sessionId) {
-      // Save to server for authenticated users
       try {
         await fetch("/api/user/languages", {
           method: "PUT",
@@ -200,23 +185,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify({ languages: newLanguages }),
         });
-        // Update user object
-        setUser(prev => prev ? { ...prev, languages: newLanguages } : null);
       } catch (e) {
         console.error("Failed to save languages:", e);
       }
-    } else {
-      // Save to localStorage for anonymous users
-      localStorage.setItem(LANGUAGES_KEY, JSON.stringify(newLanguages));
     }
   }, [sessionId]);
 
   const setScriptMode = useCallback(async (language: string, useLatinLetters: boolean) => {
     const newScriptModes = { ...scriptModes, [language]: useLatinLetters };
     setScriptModesState(newScriptModes);
+    setUser(prev => prev ? { ...prev, script_modes: newScriptModes } : null);
     
     if (sessionId) {
-      // Save to server for authenticated users
       try {
         await fetch("/api/user/languages", {
           method: "PUT",
@@ -226,14 +206,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify({ scriptModes: newScriptModes }),
         });
-        // Update user object
-        setUser(prev => prev ? { ...prev, script_modes: newScriptModes } : null);
       } catch (e) {
         console.error("Failed to save script mode:", e);
       }
-    } else {
-      // Save to localStorage for anonymous users
-      localStorage.setItem(SCRIPT_MODES_KEY, JSON.stringify(newScriptModes));
     }
   }, [sessionId, scriptModes]);
 
@@ -244,7 +219,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: {
           "Content-Type": "application/json",
           ...(sessionId && { "x-session-id": sessionId }),
-          ...(anonId && { "x-anon-id": anonId }),
         },
         body: JSON.stringify({ provider }),
       });
@@ -260,7 +234,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Error getting ephemeral token:", error);
       return null;
     }
-  }, [sessionId, anonId]);
+  }, [sessionId]);
 
   // Helper to make authenticated API calls
   const authFetch = useCallback((url: string, options: RequestInit = {}): Promise<Response> => {
@@ -268,18 +242,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ...(options.headers as Record<string, string>),
     };
     
-    // Add appropriate auth header
     if (sessionId) {
       headers["x-session-id"] = sessionId;
-    } else if (anonId) {
-      headers["x-anon-id"] = anonId;
     }
     
     return fetch(url, { ...options, headers });
-  }, [sessionId, anonId]);
+  }, [sessionId]);
 
-  const isAnonymous = !user && !!anonId;
-  const effectiveUserId = user?.id || anonId;
+  // Anonymous = user exists but has no email
+  const isAnonymous = !!user && !user.email;
+  const effectiveUserId = user?.id || null;
 
   return (
     <AuthContext.Provider value={{ 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { initDb, verifyAuthToken, getOrCreateUser, createSession } from "@/lib/db";
+import { initDb, verifyAuthToken, getOrCreateUser, claimUser, getUserByEmail, createSession } from "@/lib/db";
 import { sendNewUserNotification } from "@/lib/email";
 
 export async function GET(request: NextRequest) {
@@ -13,14 +13,39 @@ export async function GET(request: NextRequest) {
     await initDb();
 
     // Verify the token
-    const email = await verifyAuthToken(token);
+    const tokenData = await verifyAuthToken(token);
 
-    if (!email) {
+    if (!tokenData) {
       return NextResponse.redirect(new URL("/login?error=invalid_token", request.url));
     }
 
-    // Get or create user
-    const { user, isNew } = await getOrCreateUser(email);
+    const { email, userId: claimUserId } = tokenData;
+    let user;
+    let isNew = false;
+
+    // Check if email is already registered
+    const existingUserWithEmail = await getUserByEmail(email);
+
+    if (existingUserWithEmail) {
+      // Email already registered - use that account
+      // (If they had anonymous data, it stays orphaned - they need to merge manually)
+      user = existingUserWithEmail;
+    } else if (claimUserId) {
+      // Claim the anonymous user by setting their email
+      user = await claimUser(claimUserId, email);
+      if (!user) {
+        // This shouldn't happen since we checked email doesn't exist
+        const result = await getOrCreateUser(email);
+        user = result.user;
+        isNew = result.isNew;
+      }
+      isNew = true; // First time this user has an email
+    } else {
+      // No existing user and no user to claim - create new
+      const result = await getOrCreateUser(email);
+      user = result.user;
+      isNew = result.isNew;
+    }
 
     // Notify admin of new registration (non-blocking)
     if (isNew) {
