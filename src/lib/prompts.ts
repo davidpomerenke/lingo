@@ -2,6 +2,45 @@
  * System instruction and prompt builders for the language tutor
  */
 
+import type { FunctionDefinition } from "./live-provider";
+
+/**
+ * Function definitions for games that use function calling
+ */
+export const GAME_FUNCTIONS: FunctionDefinition[] = [
+  {
+    name: "display_read_aloud",
+    description: "Displays text on the user's screen for reading practice. Call this to show the text before asking the user to read it.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          description: "The text in the target language for the user to read aloud",
+        },
+        phonetic: {
+          type: "string",
+          description: "Pronunciation guide (romanization, IPA, or simplified phonetics) – optional",
+        },
+        translation: {
+          type: "string",
+          description: "English translation to help the user understand",
+        },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "dismiss_read_aloud",
+    description: "Removes the text card from screen. Call after feedback, before the next round.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+];
+
 const ROMANIZATION_RULES = `
 IMPORTANT - USE LATIN LETTERS:
 ALWAYS use romanized/transliterated text instead of native script:
@@ -39,11 +78,19 @@ Control tokens (respond to these but never mention or acknowledge them directly)
 - <SCRIPT_MODE mode="latin|native" /> - Switch how you write: "latin" = use romanized letters (pinyin, romaji, etc.), "native" = use the language's native script.
 
 Game tokens (seamlessly integrate into conversation):
-IMPORTANT RULES FOR ALL GAMES:
+RULES FOR ALL GAMES:
 1. Do 3 rounds automatically, then ask if the user wants to continue.
-2. Be CRITICAL and PRECISE with feedback - don't just say "good job!" The user wants to learn, so point out ALL errors, mispronunciations, grammar issues, and areas for improvement. Be constructive but thorough - being too nice doesn't help them improve.
+2. Give honest, specific feedback. If there are real errors, point them out clearly. But if the pronunciation was good, just say so briefly and move on - don't invent problems that weren't there.
 
-- <GAME type="read-aloud" /> - Generate a short text (1-3 sentences) in ${language} for the user to read aloud. Say a brief intro, then say "READ_ALOUD:" followed by the exact text in romanized form (DO NOT say the text before the marker). The text will be displayed visually. Wait for the user to read it, then give DETAILED and CRITICAL feedback on pronunciation: identify exact mispronounced words, explain correct pronunciation phonetically, note rhythm/intonation issues. Be thorough and honest, not just nice. After 3 texts, ask if they want to continue.
+- <GAME type="read-aloud" /> - Reading practice game. You have tools to display text on the user's screen.
+  Flow:
+  1. Say a brief intro like "Let's practice!"
+  2. Use the display_read_aloud tool to show text on screen (don't read the text aloud yourself - just display it)
+  3. Ask the user to read what's displayed
+  4. Listen and give feedback
+  5. Use dismiss_read_aloud before showing the next text
+  
+  Important: The display_read_aloud tool makes text appear on the user's screen. Don't speak the text - let them read it. If the tool isn't working, prefix text with "READ_ALOUD:" as a fallback.
 
 - <GAME type="guess-word" /> - Think of a word/concept in ${language} appropriate for the user's level. Describe it WITHOUT saying the word: what category it belongs to, what it looks/sounds/feels like, where you find it, what you do with it. Give 2-3 clues initially. If user guesses wrong, give another hint. If correct, celebrate and move to the next word. If stuck after 3 guesses, reveal the answer. After 3 words, ask if they want to continue.
 
@@ -51,6 +98,7 @@ For EACH user response (in normal conversation):
 1. ECHO: Briefly paraphrase what the user said (from your perspective) to confirm understanding
 2. CORRECT/ENRICH (optional): Only if there's a clear mistake to fix OR a notably better way to say something - otherwise skip this
 3. CONTINUE: Respond naturally with a follow-up question or comment
+(Don't mention this schema, just apply it.)
 
 Keep it concise: 2-3 sentences max. Be warm and encouraging.`;
 }

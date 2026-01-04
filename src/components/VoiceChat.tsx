@@ -10,27 +10,35 @@ import { ConversationPanel } from "./ConversationPanel";
 import { LanguageSelector } from "./LanguageSelector";
 import { ProviderSelector } from "./ProviderSelector";
 import { GamePills } from "./GamePills";
+import { ReadAloudCard } from "./ReadAloudCard";
+import { SignInPrompt } from "./SignInPrompt";
 import { Toggle } from "./ui/toggle";
 import { TrashIcon } from "./ui/icons";
 import { LoadingSpinner } from "./ui/loading";
 import { useAuth } from "@/lib/auth-context";
 import { hasGoodAudioSupport, getUserContext } from "@/lib/utils";
-import { buildSystemInstruction } from "@/lib/prompts";
+import { buildSystemInstruction, GAME_FUNCTIONS } from "@/lib/prompts";
+import type { FunctionCall } from "@/lib/live-provider";
 import { 
   isNonLatinLanguage, 
   isSupportedLanguage, 
   getLanguageCode,
 } from "@/lib/languages";
 
+// Structured data for read-aloud card (from function calling)
+interface ReadAloudCard {
+  text: string;
+  phonetic?: string;
+  translation?: string;
+}
+
 export function VoiceChat() {
   const { isAnonymous, getEphemeralToken, login, languages, scriptModes, setScriptMode } = useAuth();
   
   const [selectedLanguage, setSelectedLanguage] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<ProviderType>("gemini");
-  const [readAloudText, setReadAloudText] = useState<string | null>(null);
+  const [readAloudCard, setReadAloudCard] = useState<ReadAloudCard | null>(null);
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
-  const [signInEmail, setSignInEmail] = useState("");
-  const [signInStatus, setSignInStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionsAfterMessageIndex, setSuggestionsAfterMessageIndex] = useState<number>(-1);
   const [showBrowserWarning, setShowBrowserWarning] = useState(false);
@@ -54,8 +62,6 @@ export function VoiceChat() {
     setShowBrowserWarning(!hasGoodAudioSupport());
   }, []);
   
-  // Track which message triggered the card
-  const cardSourceMessageIdRef = useRef<string | null>(null);
   // Track suggestion generation to only do once per AI turn
   const suggestionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastAiMessageIdForSuggestionsRef = useRef<string | null>(null);
@@ -103,65 +109,97 @@ export function VoiceChat() {
     addTranscript("assistant", text, { language: lang, useLatinLetters, provider: selectedProvider });
   }, [addTranscript, lang, useLatinLetters, selectedProvider]);
 
+  // Handle function calls from the AI (for games like read-aloud)
+  const handleFunctionCall = useCallback((call: FunctionCall) => {
+    switch (call.name) {
+      case "display_read_aloud": {
+        const args = call.arguments as { text: string; phonetic?: string; translation?: string };
+        setReadAloudCard({
+          text: args.text,
+          phonetic: args.phonetic,
+          translation: args.translation,
+        });
+        // Send result back to continue the conversation
+        liveProviderRef.current?.sendFunctionResult({
+          callId: call.id,
+          name: call.name,
+          result: { displayed: true },
+        });
+        break;
+      }
+      case "dismiss_read_aloud": {
+        setReadAloudCard(null);
+        // Send result back to continue the conversation
+        liveProviderRef.current?.sendFunctionResult({
+          callId: call.id,
+          name: call.name,
+          result: { dismissed: true },
+        });
+        break;
+      }
+      default:
+        console.warn("Unknown function call:", call.name);
+    }
+  }, []);
+
+  // Reference to liveProvider for use in callbacks
+  const liveProviderRef = useRef<ReturnType<typeof useLiveProvider> | null>(null);
+
   const liveProvider = useLiveProvider({
     provider: selectedProvider,
     voiceName: "Kore",
     systemInstruction,
+    functions: GAME_FUNCTIONS,
     inputLanguage: getLanguageCode(lang), // Help transcription recognize the expected language
     onUserTranscript: handleUserTranscript,
     onModelTranscript: handleModelTranscript,
+    onFunctionCall: handleFunctionCall,
   });
+  
+  // Keep ref updated
+  liveProviderRef.current = liveProvider;
 
-  // Manage read-aloud card based on messages
+  // Fallback: Parse READ_ALOUD: markers from messages (for providers without function calling)
+  // This works alongside function calling - functions take priority when available
   useEffect(() => {
-    if (messages.length === 0) {
-      if (cardSourceMessageIdRef.current) {
-        setReadAloudText(null);
-        cardSourceMessageIdRef.current = null;
-      }
-      return;
-    }
+    // Skip if card is already shown
+    if (readAloudCard !== null) return;
     
-    // Find the most recent message with TEXT: marker
-    let textMessageIndex = -1;
-    let extractedText = "";
-    
-    for (let i = messages.length - 1; i >= 0; i--) {
+    // Look for READ_ALOUD: marker in recent messages
+    for (let i = messages.length - 1; i >= Math.max(0, messages.length - 3); i--) {
       const msg = messages[i];
       if (msg.role === "assistant" && msg.content.includes("READ_ALOUD:")) {
         const match = msg.content.match(/READ_ALOUD:\s*([\s\S]+)/);
         if (match) {
-          textMessageIndex = i;
-          extractedText = match[1].trim();
-          break;
+          const text = match[1].trim();
+          setReadAloudCard({ text });
+          return;
         }
       }
     }
+  }, [messages, readAloudCard]);
+
+  // Auto-dismiss marker-based card after conversation progresses (3+ messages after the marker)
+  useEffect(() => {
+    if (readAloudCard === null) return;
     
-    if (textMessageIndex === -1) {
-      // No TEXT: message found, clear card
-      if (cardSourceMessageIdRef.current) {
-        setReadAloudText(null);
-        cardSourceMessageIdRef.current = null;
-      }
-      return;
-    }
-    
-    // Count how many messages AFTER the TEXT: message
-    const messagesAfter = messages.length - 1 - textMessageIndex;
-    
-    if (messagesAfter <= 2) {
-      // Show/update card - update text as message streams
-      cardSourceMessageIdRef.current = messages[textMessageIndex].id;
-      setReadAloudText(extractedText);
-    } else {
-      // More than 2 messages after, hide card
-      if (cardSourceMessageIdRef.current) {
-        setReadAloudText(null);
-        cardSourceMessageIdRef.current = null;
+    // Find the marker message
+    let markerIndex = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant" && messages[i].content.includes("READ_ALOUD:")) {
+        markerIndex = i;
+        break;
       }
     }
-  }, [messages]); // Only depend on messages, not readAloudText
+    
+    // If we found a marker and there are 3+ messages after it, dismiss the card
+    if (markerIndex >= 0) {
+      const messagesAfter = messages.length - 1 - markerIndex;
+      if (messagesAfter > 2) {
+        setReadAloudCard(null);
+      }
+    }
+  }, [messages, readAloudCard]);
 
   // Track previous isModelSpeaking state to detect when model STOPS speaking
   const wasModelSpeakingRef = useRef(false);
@@ -268,8 +306,7 @@ export function VoiceChat() {
   // Handle game selection - works even when not connected
   const handleGameSelect = async (gameId: string) => {
     sealAll();
-    setReadAloudText(null);
-    cardSourceMessageIdRef.current = null;
+    setReadAloudCard(null); // Clear any existing read-aloud card
     
     if (liveProvider.status !== "connected") {
       const token = await getEphemeralToken(selectedProvider);
@@ -280,21 +317,6 @@ export function VoiceChat() {
       await liveProvider.startSession(token, history, `${context}\n<GAME type="${gameId}" />`, true);
     } else {
       liveProvider.sendPrompt(`<GAME type="${gameId}" />`);
-    }
-  };
-
-  // Handle sign-in from prompt
-  const handleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!signInEmail) return;
-    
-    setSignInStatus("sending");
-    const result = await login(signInEmail);
-    
-    if (result.success) {
-      setSignInStatus("sent");
-    } else {
-      setSignInStatus("error");
     }
   };
 
@@ -422,20 +444,14 @@ export function VoiceChat() {
         )}
       </div>
 
-      {/* Read Aloud Display */}
-      {readAloudText && (
-        <div className="glass rounded-2xl p-6 text-center">
-          <p className="text-xs text-muted-foreground mb-2">Read this aloud:</p>
-          <p className="text-xl font-medium text-foreground leading-relaxed">
-            {readAloudText}
-          </p>
-          <button
-            onClick={() => setReadAloudText(null)}
-            className="mt-3 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Dismiss
-          </button>
-        </div>
+      {/* Read Aloud Display (via function calling) */}
+      {readAloudCard && (
+        <ReadAloudCard
+          text={readAloudCard.text}
+          phonetic={readAloudCard.phonetic}
+          translation={readAloudCard.translation}
+          onDismiss={() => setReadAloudCard(null)}
+        />
       )}
 
       {/* Conversation Panel */}
@@ -469,44 +485,7 @@ export function VoiceChat() {
 
       {/* Sign-in suggestion for anonymous users */}
       {isAnonymous && showSignInPrompt && (
-        <div className="glass rounded-2xl p-6">
-          <div className="text-center mb-4">
-            <h3 className="text-lg font-semibold">Save your progress</h3>
-            <p className="text-sm text-muted-foreground mt-1">
-              Sign in to keep your conversation history
-            </p>
-          </div>
-          
-          {signInStatus === "sent" ? (
-            <div className="text-center py-4">
-              <p className="text-sm text-muted-foreground">
-                Check your email for a magic link to sign in.<br />
-                Your conversation will be saved!
-              </p>
-            </div>
-          ) : (
-            <form onSubmit={handleSignIn} className="space-y-3">
-              <input
-                type="email"
-                value={signInEmail}
-                onChange={(e) => setSignInEmail(e.target.value)}
-                placeholder="your@email.com"
-                className="w-full px-4 py-3 bg-secondary/50 border border-border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/50"
-                disabled={signInStatus === "sending"}
-              />
-              <button
-                type="submit"
-                disabled={signInStatus === "sending" || !signInEmail}
-                className="w-full py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:opacity-50 transition-all"
-              >
-                {signInStatus === "sending" ? "Sending..." : "Sign in with Email"}
-              </button>
-              {signInStatus === "error" && (
-                <p className="text-sm text-destructive text-center">Failed to send email. Try again.</p>
-              )}
-            </form>
-          )}
-        </div>
+        <SignInPrompt onLogin={login} />
       )}
 
       {/* Practice Games - below conversation */}

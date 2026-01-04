@@ -36,6 +36,7 @@ export interface FunctionCall {
 // Function result to send back
 export interface FunctionResult {
   callId: string;
+  name: string;  // Function name (required by Gemini)
   result: unknown;
 }
 

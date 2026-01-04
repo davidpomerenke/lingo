@@ -19,6 +19,7 @@ import type {
   FunctionResult 
 } from "./live-provider";
 import { blobToBase64, base64ToPcmBlob } from "./audio-utils";
+import { reportErrorToBackend } from "./utils";
 
 // OpenAI Realtime event types
 interface RealtimeEvent {
@@ -221,7 +222,7 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
           
           // Report quota errors to backend for admin notification
           if (errorType === "insufficient_quota") {
-            this.reportErrorToBackend("openai", errorType, errorMessage);
+            reportErrorToBackend("openai", errorType, errorMessage);
           }
           
           // Create user-friendly error message
@@ -248,7 +249,7 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
               arguments: args,
             });
           } catch {
-            console.error("OpenAI: Failed to parse function arguments");
+            // Ignore parse errors for malformed function arguments
           }
         }
         break;
@@ -281,18 +282,8 @@ export class OpenAIRealtimeAdapter implements LiveProvider {
         break;
 
       default:
-        // Log unhandled events for debugging
-        console.log("OpenAI: Unhandled event:", event.type);
+        break;
     }
-  }
-
-  private reportErrorToBackend(provider: string, errorType: string, errorMessage: string): void {
-    // Fire and forget - don't await
-    fetch("/api/report-error", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider, errorType, errorMessage }),
-    }).catch(err => console.error("Failed to report error:", err));
   }
 
   private send(event: RealtimeEvent): void {

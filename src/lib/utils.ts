@@ -6,6 +6,18 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * Report an API error to the backend for admin notification
+ * Fire-and-forget - doesn't await or throw
+ */
+export function reportErrorToBackend(provider: string, errorType: string, errorMessage: string): void {
+  fetch("/api/report-error", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, errorType, errorMessage }),
+  }).catch(() => {/* ignore */});
+}
+
+/**
  * Detect if browser has good audio support (Chrome, Safari, Edge, Opera, Brave)
  */
 export function hasGoodAudioSupport(): boolean {

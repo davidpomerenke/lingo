@@ -8,6 +8,7 @@
 import { GoogleGenAI, LiveServerMessage, Modality, Session, Blob as GeminiBlob, FunctionDeclaration, Type } from "@google/genai";
 import type { LiveProvider, LiveProviderConfig, LiveProviderCallbacks, FunctionDefinition, FunctionResult } from "./live-provider";
 import { blobToBase64, base64ToPcmBlob } from "./audio-utils";
+import { reportErrorToBackend } from "./utils";
 
 // Map our function definitions to Gemini's format
 function toGeminiFunctionDeclarations(functions?: FunctionDefinition[]): FunctionDeclaration[] | undefined {
@@ -43,6 +44,7 @@ export class GeminiLiveAdapter implements LiveProvider {
   private session: Session | null = null;
   private callbacks: LiveProviderCallbacks;
   private config: LiveProviderConfig;
+  private connectionOpen = false;  // Track actual WebSocket state
 
   constructor(config: LiveProviderConfig, callbacks: LiveProviderCallbacks = {}) {
     this.config = config;
@@ -84,6 +86,7 @@ export class GeminiLiveAdapter implements LiveProvider {
       config: sessionConfig,
       callbacks: {
         onopen: () => {
+          this.connectionOpen = true;
           this.callbacks.onOpen?.();
         },
         onmessage: (message: LiveServerMessage) => {
@@ -91,6 +94,7 @@ export class GeminiLiveAdapter implements LiveProvider {
         },
         onerror: (e: ErrorEvent) => {
           console.error("Gemini Live Error:", e.message);
+          this.connectionOpen = false;
           
           // Check for quota-related errors
           const errorMessage = e.message || "";
@@ -99,13 +103,14 @@ export class GeminiLiveAdapter implements LiveProvider {
                                errorMessage.includes("billing");
           
           if (isQuotaError) {
-            this.reportErrorToBackend("gemini", "RESOURCE_EXHAUSTED", errorMessage);
+            reportErrorToBackend("gemini", "RESOURCE_EXHAUSTED", errorMessage);
             this.callbacks.onError?.(new Error("Gemini API quota exceeded. Please try OpenAI instead."));
           } else {
             this.callbacks.onError?.(new Error(e.message));
           }
         },
         onclose: () => {
+          this.connectionOpen = false;
           this.callbacks.onClose?.();
         },
       },
@@ -113,6 +118,20 @@ export class GeminiLiveAdapter implements LiveProvider {
   }
 
   private handleMessage(message: LiveServerMessage): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const messageAny = message as any;
+
+    // Handle tool calls (per Gemini Live API docs - comes as message.toolCall)
+    if (messageAny.toolCall?.functionCalls) {
+      for (const fc of messageAny.toolCall.functionCalls) {
+        this.callbacks.onFunctionCall?.({
+          id: fc.id || crypto.randomUUID(),
+          name: fc.name || "",
+          arguments: (fc.args as Record<string, unknown>) || {},
+        });
+      }
+    }
+
     // Handle model audio responses
     if (message.serverContent?.modelTurn?.parts) {
       for (const part of message.serverContent.modelTurn.parts) {
@@ -121,7 +140,7 @@ export class GeminiLiveAdapter implements LiveProvider {
           this.callbacks.onAudio?.(blob);
         }
         
-        // Handle function calls
+        // Also check for function calls in parts (legacy/alternative format)
         if (part.functionCall) {
           this.callbacks.onFunctionCall?.({
             id: part.functionCall.id || crypto.randomUUID(),
@@ -186,7 +205,8 @@ export class GeminiLiveAdapter implements LiveProvider {
   }
 
   async sendAudio(audioBlob: Blob): Promise<void> {
-    if (!this.session) return;
+    // Check both session existence and connection state
+    if (!this.session || !this.isConnected()) return;
     
     try {
       const base64Data = await blobToBase64(audioBlob);
@@ -200,22 +220,36 @@ export class GeminiLiveAdapter implements LiveProvider {
         audio: audioData,
       });
     } catch (err) {
-      console.error("Error sending audio:", err);
+      // Silently ignore WebSocket closed errors - they're expected during disconnect
+      const errMsg = String(err);
+      if (!errMsg.includes("CLOSING") && !errMsg.includes("CLOSED")) {
+        console.error("Error sending audio:", err);
+      }
     }
   }
 
   sendFunctionResult(result: FunctionResult): void {
-    if (!this.session) return;
+    if (!this.session || !this.connectionOpen) return;
     
-    this.session.sendToolResponse({
-      functionResponses: [{
-        id: result.callId,
-        response: result.result as Record<string, unknown>,
-      }],
-    });
+    try {
+      this.session.sendToolResponse({
+        functionResponses: [{
+          id: result.callId,
+          name: result.name,
+          response: result.result as Record<string, unknown>,
+        }],
+      });
+    } catch (err) {
+      // Silently ignore if connection is closed
+      const errMsg = String(err);
+      if (!errMsg.includes("CLOSING") && !errMsg.includes("CLOSED")) {
+        console.error("Error sending function result:", err);
+      }
+    }
   }
 
   disconnect(): void {
+    this.connectionOpen = false;
     if (this.session) {
       this.session.close();
       this.session = null;
@@ -223,16 +257,7 @@ export class GeminiLiveAdapter implements LiveProvider {
   }
 
   isConnected(): boolean {
-    return this.session !== null;
-  }
-
-  private reportErrorToBackend(provider: string, errorType: string, errorMessage: string): void {
-    // Fire and forget - don't await
-    fetch("/api/report-error", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider, errorType, errorMessage }),
-    }).catch(err => console.error("Failed to report error:", err));
+    return this.session !== null && this.connectionOpen;
   }
 }
 
