@@ -39,6 +39,28 @@ export interface DbMessage {
   created_at: string;
 }
 
+export interface DbConcept {
+  id: string;
+  user_id: string;
+  language: string;
+  concept: string;
+  type: "vocabulary" | "grammar" | "phrase";
+  context?: string;
+  notes?: string;
+  // Recognition SRS (understand when heard)
+  recog_ease: number;
+  recog_interval: number;
+  recog_due?: string;
+  recog_reps: number;
+  // Production SRS (can produce when needed)
+  prod_ease: number;
+  prod_interval: number;
+  prod_due?: string;
+  prod_reps: number;
+  created_at: string;
+  last_reviewed?: string;
+}
+
 // ============ Schema ============
 
 let dbInitialized = false;
@@ -120,6 +142,30 @@ export async function initDb() {
       content TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
+
+  // Concepts (flashcards) for spaced repetition
+  // Note: No foreign key on user_id to support anonymous users
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS concepts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      language TEXT NOT NULL,
+      concept TEXT NOT NULL,
+      type TEXT NOT NULL,
+      context TEXT,
+      notes TEXT,
+      recog_ease REAL DEFAULT 2.5,
+      recog_interval INTEGER DEFAULT 0,
+      recog_due TEXT,
+      recog_reps INTEGER DEFAULT 0,
+      prod_ease REAL DEFAULT 2.5,
+      prod_interval INTEGER DEFAULT 0,
+      prod_due TEXT,
+      prod_reps INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_reviewed TEXT
     )
   `);
 }
@@ -374,6 +420,85 @@ export async function countMessages(userId: string): Promise<number> {
     sql: "SELECT COUNT(*) as count FROM messages WHERE user_id = ?",
     args: [userId],
   });
+  return result.rows[0].count as number;
+}
+
+// ============ Concepts (Flashcards) ============
+
+export async function createConcept(
+  userId: string,
+  language: string,
+  concept: string,
+  type: "vocabulary" | "grammar" | "phrase",
+  context?: string,
+  notes?: string
+): Promise<DbConcept> {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  
+  await client.execute({
+    sql: `INSERT INTO concepts (id, user_id, language, concept, type, context, notes, created_at) 
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [id, userId, language, concept, type, context ?? null, notes ?? null, now],
+  });
+  
+  return {
+    id,
+    user_id: userId,
+    language,
+    concept,
+    type,
+    context,
+    notes,
+    recog_ease: 2.5,
+    recog_interval: 0,
+    recog_due: undefined,
+    recog_reps: 0,
+    prod_ease: 2.5,
+    prod_interval: 0,
+    prod_due: undefined,
+    prod_reps: 0,
+    created_at: now,
+    last_reviewed: undefined,
+  };
+}
+
+export async function getConcepts(userId: string, language?: string): Promise<DbConcept[]> {
+  const sql = language
+    ? "SELECT * FROM concepts WHERE user_id = ? AND language = ? ORDER BY created_at DESC"
+    : "SELECT * FROM concepts WHERE user_id = ? ORDER BY created_at DESC";
+  const args = language ? [userId, language] : [userId];
+  
+  const result = await client.execute({ sql, args });
+  
+  return result.rows.map((row) => ({
+    id: row.id as string,
+    user_id: row.user_id as string,
+    language: row.language as string,
+    concept: row.concept as string,
+    type: row.type as "vocabulary" | "grammar" | "phrase",
+    context: row.context as string | undefined,
+    notes: row.notes as string | undefined,
+    recog_ease: row.recog_ease as number,
+    recog_interval: row.recog_interval as number,
+    recog_due: row.recog_due as string | undefined,
+    recog_reps: row.recog_reps as number,
+    prod_ease: row.prod_ease as number,
+    prod_interval: row.prod_interval as number,
+    prod_due: row.prod_due as string | undefined,
+    prod_reps: row.prod_reps as number,
+    created_at: row.created_at as string,
+    last_reviewed: row.last_reviewed as string | undefined,
+  }));
+}
+
+export async function countConcepts(userId: string, language?: string): Promise<number> {
+  const sql = language
+    ? "SELECT COUNT(*) as count FROM concepts WHERE user_id = ? AND language = ?"
+    : "SELECT COUNT(*) as count FROM concepts WHERE user_id = ?";
+  const args = language ? [userId, language] : [userId];
+  
+  const result = await client.execute({ sql, args });
   return result.rows[0].count as number;
 }
 

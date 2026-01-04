@@ -223,7 +223,7 @@ export class GeminiLiveAdapter implements LiveProvider {
       // Silently ignore WebSocket closed errors - they're expected during disconnect
       const errMsg = String(err);
       if (!errMsg.includes("CLOSING") && !errMsg.includes("CLOSED")) {
-        console.error("Error sending audio:", err);
+      console.error("Error sending audio:", err);
       }
     }
   }
@@ -232,13 +232,13 @@ export class GeminiLiveAdapter implements LiveProvider {
     if (!this.session || !this.connectionOpen) return;
     
     try {
-      this.session.sendToolResponse({
-        functionResponses: [{
-          id: result.callId,
+    this.session.sendToolResponse({
+      functionResponses: [{
+        id: result.callId,
           name: result.name,
-          response: result.result as Record<string, unknown>,
-        }],
-      });
+        response: result.result as Record<string, unknown>,
+      }],
+    });
     } catch (err) {
       // Silently ignore if connection is closed
       const errMsg = String(err);

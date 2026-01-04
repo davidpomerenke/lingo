@@ -12,6 +12,7 @@ import { ProviderSelector } from "./ProviderSelector";
 import { GamePills } from "./GamePills";
 import { ReadAloudCard } from "./ReadAloudCard";
 import { SignInPrompt } from "./SignInPrompt";
+import type { Flashcard } from "./FlashcardIndicator";
 import { Toggle } from "./ui/toggle";
 import { TrashIcon } from "./ui/icons";
 import { LoadingSpinner } from "./ui/loading";
@@ -33,11 +34,12 @@ interface ReadAloudCard {
 }
 
 export function VoiceChat() {
-  const { isAnonymous, getEphemeralToken, login, languages, scriptModes, setScriptMode } = useAuth();
+  const { isAnonymous, effectiveUserId, getEphemeralToken, login, languages, scriptModes, setScriptMode, authFetch } = useAuth();
   
   const [selectedLanguage, setSelectedLanguage] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<ProviderType>("gemini");
   const [readAloudCard, setReadAloudCard] = useState<ReadAloudCard | null>(null);
+  const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionsAfterMessageIndex, setSuggestionsAfterMessageIndex] = useState<number>(-1);
@@ -137,10 +139,54 @@ export function VoiceChat() {
         });
         break;
       }
+      case "create_flashcard": {
+        const args = call.arguments as { 
+          concept: string; 
+          type: string; 
+          context?: string; 
+          notes?: string;
+        };
+        
+        // Create flashcard immediately for UI (with timestamp for ordering)
+        const flashcard: Flashcard = {
+          id: crypto.randomUUID(),
+          concept: args.concept,
+          type: (args.type as "vocabulary" | "grammar" | "phrase") || "vocabulary",
+          context: args.context,
+          notes: args.notes,
+          createdAt: new Date().toISOString(),
+        };
+        
+        setFlashcards(prev => [...prev, flashcard]);
+        
+        // Save to database in background (fire and forget)
+        if (effectiveUserId) {
+          authFetch("/api/flashcards", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userId: effectiveUserId,
+              language: lang,
+              concept: args.concept,
+              type: args.type || "vocabulary",
+              context: args.context,
+              notes: args.notes,
+            }),
+          }).catch(err => console.error("Failed to save flashcard:", err));
+        }
+        
+        // Send result back to continue the conversation
+        liveProviderRef.current?.sendFunctionResult({
+          callId: call.id,
+          name: call.name,
+          result: { saved: true },
+        });
+        break;
+      }
       default:
         console.warn("Unknown function call:", call.name);
     }
-  }, []);
+  }, [effectiveUserId, authFetch, lang]);
 
   // Reference to liveProvider for use in callbacks
   const liveProviderRef = useRef<ReturnType<typeof useLiveProvider> | null>(null);
@@ -475,6 +521,7 @@ export function VoiceChat() {
           </button>
           <ConversationPanel
             messages={messages}
+            flashcards={flashcards}
             isModelSpeaking={liveProvider.isModelSpeaking}
             currentLanguage={selectedLanguage}
             suggestions={suggestions}

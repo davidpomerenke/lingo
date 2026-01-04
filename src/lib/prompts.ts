@@ -39,6 +39,32 @@ export const GAME_FUNCTIONS: FunctionDefinition[] = [
       required: [],
     },
   },
+  {
+    name: "create_flashcard",
+    description: "Save a concept the user needs to learn. Call this when you notice the user doesn't know a word, uses the wrong word, makes a grammar mistake, or could benefit from learning something. The flashcard will be saved for spaced repetition practice.",
+    parameters: {
+      type: "object",
+      properties: {
+        concept: {
+          type: "string",
+          description: "The concept to learn, e.g. 'acheter (to buy)' or 'passé composé with être verbs'",
+        },
+        type: {
+          type: "string",
+          description: "Type of concept: vocabulary, grammar, or phrase",
+        },
+        context: {
+          type: "string",
+          description: "What the user said or tried to say that revealed this gap",
+        },
+        notes: {
+          type: "string",
+          description: "Tips, common mistakes, or what the user confused this with",
+        },
+      },
+      required: ["concept", "type"],
+    },
+  },
 ];
 
 const ROMANIZATION_RULES = `
@@ -93,6 +119,14 @@ RULES FOR ALL GAMES:
   Important: The display_read_aloud tool makes text appear on the user's screen. Don't speak the text - let them read it. If the tool isn't working, prefix text with "READ_ALOUD:" as a fallback.
 
 - <GAME type="guess-word" /> - Think of a word/concept in ${language} appropriate for the user's level. Describe it WITHOUT saying the word: what category it belongs to, what it looks/sounds/feels like, where you find it, what you do with it. Give 2-3 clues initially. If user guesses wrong, give another hint. If correct, celebrate and move to the next word. If stuck after 3 guesses, reveal the answer. After 3 words, ask if they want to continue.
+
+FLASHCARD CREATION:
+When you notice the user doesn't know a word, uses the wrong word, makes a grammar mistake, or you teach them something new - use create_flashcard to save it for later practice. Don't mention that you're saving it, just do it silently. Examples of when to create a flashcard:
+- User says English word instead of target language
+- User uses wrong word or wrong form
+- User asks "how do you say X?"
+- You correct or suggest a better way to say something
+- Grammar mistake (verb conjugation, gender, etc.)
 
 For EACH user response (in normal conversation):
 1. ECHO: Briefly paraphrase what the user said (from your perspective) to confirm understanding

@@ -3,12 +3,14 @@
 import { cn } from "@/lib/utils";
 import { isRtlLanguage, isNonSpaceDelimitedChar } from "@/lib/languages";
 import type { Message } from "@/types/message";
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import { FlashcardIndicator, type Flashcard } from "./FlashcardIndicator";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 
 const ONBOARDING_KEY = "lingo-translate-tip-seen";
 
 interface ConversationPanelProps {
   messages: Message[];
+  flashcards?: Flashcard[];
   isModelSpeaking: boolean;
   currentLanguage?: string;
   suggestions?: string[];
@@ -80,7 +82,29 @@ function isMessageRTL(message: Message): boolean {
   return isRtlLanguage(message.language);
 }
 
-export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, suggestions = [], suggestionsAfterMessageIndex = -1 }: ConversationPanelProps) {
+// Item types for unified conversation display
+type ConversationItem = 
+  | { type: "message"; data: Message; messageIndex: number }
+  | { type: "flashcard"; data: Flashcard };
+
+export function ConversationPanel({ messages, flashcards = [], isModelSpeaking, currentLanguage, suggestions = [], suggestionsAfterMessageIndex = -1 }: ConversationPanelProps) {
+  // Build unified list: messages with flashcards rendered at end (for now)
+  // In Phase 1, we show flashcards at the end. Future: track message index when created.
+  const conversationItems = useMemo((): ConversationItem[] => {
+    const items: ConversationItem[] = [];
+    
+    // Add all messages in order
+    messages.forEach((msg, index) => {
+      items.push({ type: "message", data: msg, messageIndex: index });
+    });
+    
+    // Add all flashcards at the end (they appear as AI creates them)
+    flashcards.forEach((fc) => {
+      items.push({ type: "flashcard", data: fc });
+    });
+    
+    return items;
+  }, [messages, flashcards]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const firstMessageRef = useRef<HTMLDivElement>(null);
@@ -372,11 +396,23 @@ export function ConversationPanel({ messages, isModelSpeaking, currentLanguage, 
           </div>
         ) : (
           <div className="space-y-4">
-            {messages.map((message, index) => {
+            {conversationItems.map((item, itemIndex) => {
+              // Render flashcard indicator
+              if (item.type === "flashcard") {
+                return (
+                  <div key={`fc-${item.data.id}`} className="flex justify-start pl-2">
+                    <FlashcardIndicator flashcard={item.data} />
+                  </div>
+                );
+              }
+              
+              // Render message
+              const message = item.data;
+              const messageIndex = item.messageIndex;
               const rtl = isMessageRTL(message);
               const isFirstAssistant = message.id === firstAssistantMessage?.id;
               // Show suggestions after the message at suggestionsAfterMessageIndex
-              const showSuggestionsAfterThis = index === suggestionsAfterMessageIndex && suggestions.length > 0 && !isModelSpeaking;
+              const showSuggestionsAfterThis = messageIndex === suggestionsAfterMessageIndex && suggestions.length > 0 && !isModelSpeaking;
               
               return (
                 <React.Fragment key={message.id}>
